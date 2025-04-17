@@ -21,11 +21,35 @@ document.addEventListener('DOMContentLoaded', () => {
     // State variables
     let audioBlobs = [];
     let voiceMapping = {};
+    let commentersCount = {}; // Track how many comments each user has
+    let commentsByUser = {}; // Track all comments by each user
     let availableVoices = [];
     let processedComments = 0;
     let totalComments = 0;
     let retryCount = 0;
     const MAX_RETRIES = 5;
+    let allComments = []; // Store all comments for preprocessing
+    let commentHierarchy = {}; // Store parent-child relationships
+
+    // Introduction phrases for variety
+    const firstIntroductions = [
+        "Hey, {username} here.",
+        "Hi it's {username}.",
+        "Howdy I'm {username}.",
+        "Hi y'all it's {username}.",
+        "{username} here!"
+    ];
+    
+    const returnIntroductions = [
+        "Hey, it's {username} again."
+    ];
+    
+    const replyIntroductions = [
+        "(in response to {username})",
+        "(replying to {username})",
+        "A word to {username}: ",
+        "Quick comment to {username}!"
+    ];
 
     // Theme toggle functionality
     themeToggle.addEventListener('click', () => {
@@ -93,6 +117,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error("Could not retrieve thread data");
             }
             
+            // Preprocess and count all comments
+            await preprocessThread(threadData, commentLimit);
+            
             // Process thread and comments
             await processThread(threadData, apiKey, commentLimit);
             
@@ -121,9 +148,13 @@ document.addEventListener('DOMContentLoaded', () => {
     function resetState() {
         audioBlobs = [];
         voiceMapping = {};
+        commentersCount = {};
+        commentsByUser = {};
         processedComments = 0;
         totalComments = 0;
         retryCount = 0;
+        allComments = [];
+        commentHierarchy = {};
         
         progressBar.style.width = '0%';
         progressStats.textContent = '0/0 comments processed';
@@ -173,6 +204,86 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Preprocess the thread to count comments and build the hierarchy
+    async function preprocessThread(threadData, commentLimit) {
+        // Reset counts
+        commentersCount = {};
+        allComments = [];
+        commentHierarchy = {};
+        
+        // Process the original post
+        const by = threadData.by;
+        commentersCount[by] = (commentersCount[by] || 0) + 1;
+        
+        // Add the original post to allComments
+        allComments.push({
+            id: threadData.id,
+            by: by,
+            text: threadData.text || '',
+            title: threadData.title,
+            isOriginalPost: true,
+            parent: null
+        });
+        
+        // Process all comments recursively
+        await collectComments(threadData, commentLimit);
+        
+        // Count valid comments (excluding deleted, flagged, etc.)
+        totalComments = allComments.length;
+        
+        // Group comments by user
+        commentsByUser = {};
+        for (const comment of allComments) {
+            if (!commentsByUser[comment.by]) {
+                commentsByUser[comment.by] = [];
+            }
+            commentsByUser[comment.by].push(comment);
+        }
+        
+        // Update the progress UI
+        progressStats.textContent = `0/${totalComments} comments processed`;
+    }
+
+    // Recursively collect all comments
+    async function collectComments(item, commentLimit, parentId = null) {
+        if (!item.kids || allComments.length >= commentLimit) {
+            return;
+        }
+        
+        for (const commentId of item.kids) {
+            if (allComments.length >= commentLimit) {
+                break;
+            }
+            
+            const commentData = await fetchHNThread(commentId);
+            
+            // Skip invalid, deleted, flagged comments
+            if (!commentData || !commentData.text || commentData.deleted || commentData.dead || commentData.flagged) {
+                continue;
+            }
+            
+            const commenter = commentData.by;
+            
+            // Add to our comment counts
+            commentersCount[commenter] = (commentersCount[commenter] || 0) + 1;
+            
+            // Store parent-child relationship
+            commentHierarchy[commentId] = parentId;
+            
+            // Add to our list of all comments
+            allComments.push({
+                id: commentId,
+                by: commenter,
+                text: commentData.text,
+                parent: parentId,
+                isOriginalPost: false
+            });
+            
+            // Process nested comments recursively
+            await collectComments(commentData, commentLimit, commentId);
+        }
+    }
+
     // Fetch available voices from ElevenLabs
     async function fetchElevenLabsVoices(apiKey) {
         try {
@@ -201,20 +312,31 @@ document.addEventListener('DOMContentLoaded', () => {
     // Process the entire thread
     async function processThread(threadData, apiKey, commentLimit) {
         // Start with the original post
-        const title = threadData.title;
-        const text = threadData.text || '';
-        const by = threadData.by;
+        const originalPost = allComments.find(c => c.isOriginalPost);
+        if (!originalPost) return;
+        
+        const title = originalPost.title;
+        const text = originalPost.text || '';
+        const by = originalPost.by;
         
         // Assign a voice for the original poster
         assignVoice(by);
         
         let originalPostText = `${title}. `;
         if (text) {
-            originalPostText += text;
+            // Process text to handle links
+            originalPostText += processTextContent(text, true);
         }
         
-        // Create intro text
-        const introText = `Hey, ${by} here. ${originalPostText}`;
+        // Determine if poster has multiple comments
+        const hasMultipleComments = commentersCount[by] > 1;
+        
+        // Create intro text based on comment count
+        let introText = originalPostText;
+        if (hasMultipleComments) {
+            const introPhrase = getRandomIntroPhrase(firstIntroductions, by);
+            introText = `${introPhrase} ${originalPostText}`;
+        }
         
         await generateAndAddAudio(introText, voiceMapping[by], apiKey);
         processedComments++;
@@ -223,55 +345,63 @@ document.addEventListener('DOMContentLoaded', () => {
         currentUser.textContent = by;
         updateProgress();
         
-        // Handle comments
-        await processComments(threadData, apiKey, commentLimit);
-    }
-
-    // Process comments recursively
-    async function processComments(item, apiKey, commentLimit) {
-        if (!item.kids || processedComments >= commentLimit) {
-            return;
-        }
+        // Add pause between comments
+        const silenceBlob = generateSilence(400);
+        audioBlobs.push(silenceBlob);
         
-        // Set total comments for progress tracking
-        if (totalComments === 0) {
-            totalComments = Math.min(commentLimit, countTotalComments(item));
-            progressStats.textContent = `${processedComments}/${totalComments} comments processed`;
-        }
+        // Process all comments in order (flat traversal of our collected comments)
+        let lastCommenter = by;
+        let lastCommentParent = null;
         
-        // Track the last commenter for continuity
-        let lastCommenter = item.by;
-        
-        // Process each comment in order
-        for (const commentId of item.kids) {
-            if (processedComments >= commentLimit) {
-                break;
-            }
+        // Skip the first comment (original post) since we already processed it
+        for (let i = 1; i < allComments.length; i++) {
+            const comment = allComments[i];
+            const commenter = comment.by;
             
-            const commentData = await fetchHNThread(commentId);
-            if (!commentData || !commentData.text || commentData.deleted) {
-                continue;
-            }
-            
-            const commenter = commentData.by;
             currentUser.textContent = commenter;
             
             // Assign voice if not already assigned
             assignVoice(commenter);
             
-            // Create comment text with appropriate intro
+            // Process text content (handle links)
+            let processedText = processTextContent(comment.text, true);
+            
+            // Determine if user has multiple comments
+            const hasMultipleComments = commentersCount[commenter] > 1;
+            const isFirstCommentByUser = commentsByUser[commenter].findIndex(c => c.id === comment.id) === 0;
+            const isSameAsLastCommenter = commenter === lastCommenter;
+            
+            // Determine if we need a context introduction (replying to someone)
+            const needsContextIntro = comment.parent !== lastCommentParent && comment.parent !== null;
+            
+            // Build introduction text
             let commentText = "";
-            if (commenter === lastCommenter) {
-                // Same commenter as last time - no intro needed
-                commentText = commentData.text;
-            } else if (!voiceMapping[commenter].used) {
-                // First time this commenter speaks
-                commentText = `Hey, ${commenter} here. ${commentData.text}`;
-                voiceMapping[commenter].used = true;
-            } else {
-                // Returning commenter
-                commentText = `Hey, it's ${commenter} again. ${commentData.text}`;
+            
+            // Add context intro if needed (replying to someone)
+            if (needsContextIntro) {
+                const parentComment = allComments.find(c => c.id === comment.parent);
+                if (parentComment) {
+                    const parentUsername = parentComment.by;
+                    const replyIntro = getRandomIntroPhrase(replyIntroductions, parentUsername);
+                    commentText += `${replyIntro} `;
+                }
             }
+            
+            // Add user introduction if needed
+            if (hasMultipleComments) {
+                if (isFirstCommentByUser) {
+                    // First time this commenter speaks
+                    const introPhrase = getRandomIntroPhrase(firstIntroductions, commenter);
+                    commentText += `${introPhrase} `;
+                } else if (!isSameAsLastCommenter) {
+                    // Returning commenter who wasn't the last speaker
+                    const returnIntro = getRandomIntroPhrase(returnIntroductions, commenter);
+                    commentText += `${returnIntro} `;
+                }
+            }
+            
+            // Add the comment text
+            commentText += processedText;
             
             // Generate audio for this comment
             await generateAndAddAudio(commentText, voiceMapping[commenter], apiKey);
@@ -282,21 +412,40 @@ document.addEventListener('DOMContentLoaded', () => {
             
             processedComments++;
             updateProgress();
-            lastCommenter = commenter;
             
-            // Process nested comments recursively
-            await processComments(commentData, apiKey, commentLimit);
+            lastCommenter = commenter;
+            lastCommentParent = comment.parent;
         }
     }
 
-    // Count total comments in a thread (recursive)
-    function countTotalComments(item) {
-        if (!item.kids) {
-            return 0;
+    // Process text content to handle links properly
+    function processTextContent(text, isFirstLink = true) {
+        // Remove HTML tags
+        let cleanText = text.replace(/<[^>]*>/g, '');
+        
+        // Look for URLs
+        const urlRegex = /(https?:\/\/[^\s]+)/g;
+        let matches = cleanText.match(urlRegex);
+        
+        if (matches) {
+            if (isFirstLink) {
+                // Replace the first link with a generic message
+                cleanText = cleanText.replace(urlRegex, 'See the link I shared in the thread');
+                // Remove any remaining links silently
+                cleanText = cleanText.replace(urlRegex, '');
+            } else {
+                // Remove all links silently
+                cleanText = cleanText.replace(urlRegex, '');
+            }
         }
         
-        let count = item.kids.length;
-        return count; // Simplified count - just top-level comments
+        return cleanText;
+    }
+
+    // Get a random introduction phrase
+    function getRandomIntroPhrase(phrases, username) {
+        const randomIndex = Math.floor(Math.random() * phrases.length);
+        return phrases[randomIndex].replace('{username}', username);
     }
 
     // Assign a voice to a commenter
@@ -313,7 +462,6 @@ document.addEventListener('DOMContentLoaded', () => {
         voiceMapping[username] = {
             voice_id: selectedVoice.voice_id,
             name: selectedVoice.name,
-            used: false
         };
     }
 
@@ -329,9 +477,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Generate audio using ElevenLabs API
     async function generateAndAddAudio(text, voice, apiKey) {
-        // Clean the text from HTML tags
-        const cleanText = text.replace(/<[^>]*>/g, '');
-        
         try {
             const response = await fetchWithRetry(() => 
                 fetch('https://api.elevenlabs.io/v1/text-to-speech/' + voice.voice_id, {
@@ -341,7 +486,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        text: cleanText,
+                        text: text,
                         model_id: 'eleven_multilingual_v2',
                         voice_settings: {
                             stability: 0.5,
@@ -407,7 +552,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // Combine all audio blobs into one
     async function combineAudioBlobs(blobs) {
         // For simplicity, we'll use the first audio format for all
-        // This is a simplified approach - in production, you might want to convert all to same format
         return new Blob(blobs, { type: blobs[0].type });
     }
 
@@ -435,4 +579,3 @@ document.addEventListener('DOMContentLoaded', () => {
         progressContainer.classList.remove('hidden');
     }
 });
-a
