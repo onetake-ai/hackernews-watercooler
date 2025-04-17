@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HN Thread to Audio</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.2.0/css/all.min.css">
+</head>
+<body class="light-mode">
+    <div class="container">
+        <header>
+            <h1>Hacker News Watercooler</h1>
+            <button id="theme-toggle" aria-label="Toggle dark mode">
+                <i class="fas fa-moon"></i>
+            </button>
+        </header>
+
+        <main>
+            <form id="audio-form">
+                <div class="form-group">
+                    <label for="elevenlabs-api-key">ElevenLabs API Key:</label>
+                    <div class="input-wrapper">
+                        <input type="password" id="elevenlabs-api-key" required>
+                        <button type="button" class="toggle-password" aria-label="Show/hide password">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
+                    <div class="error-message" id="api-key-error"></div>
+                </div>
+
+                <div class="form-group">
+                    <label for="hn-thread-url">Hacker News Thread URL:</label>
+                    <input type="url" id="hn-thread-url" placeholder="https://news.ycombinator.com/item?id=..." required>
+                    <div class="error-message" id="url-error"></div>
+                </div>
+
+                <div class="form-group">
+                    <label for="comment-limit">Number of comments to include:</label>
+                    <input type="number" id="comment-limit" value="100" min="1" max="300">
+                </div>
+
+                <button type="submit" id="generate-btn">Generate Conversation</button>
+            </form>
+
+            <div id="progress-container" class="hidden">
+                <div class="progress-header">
+                    <h3>Generating Audio</h3>
+                    <span id="progress-stats">0/0 comments processed</span>
+                </div>
+                <div class="progress-bar-container">
+                    <div id="progress-bar"></div>
+                </div>
+                <div id="current-comment">
+                    Processing: <span id="current-user">...</span>
+                </div>
+                <div id="status-message"></div>
+            </div>
+
+            <div id="result-container" class="hidden">
+                <h3>Generated Audio</h3>
+                <audio id="result-audio" controls></audio>
+                <button id="download-btn">Download Audio</button>
+            </div>
+        </main>
+
+        <footer>
+            <p>This app processes Hacker News threads into audio conversations using ElevenLabs.</p>
+            <p>Your API key is never stored on any server and is used only to make requests directly from your browser.</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
