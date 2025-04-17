@@ -325,7 +325,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let originalPostText = `${title}. `;
         if (text) {
             // Process text to handle links
-            originalPostText += processTextContent(text, true);
+            originalPostText += processTextContent(text);
         }
         
         // Determine if poster has multiple comments
@@ -364,7 +364,7 @@ document.addEventListener('DOMContentLoaded', () => {
             assignVoice(commenter);
             
             // Process text content (handle links)
-            let processedText = processTextContent(comment.text, true);
+            let processedText = processTextContent(comment.text);
             
             // Determine if user has multiple comments
             const hasMultipleComments = commentersCount[commenter] > 1;
@@ -419,22 +419,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Process text content to handle links properly
-    function processTextContent(text, isFirstLink = true) {
-        // Remove HTML tags
+    function processTextContent(text) {
+        // First, clean HTML tags
         let cleanText = text.replace(/<[^>]*>/g, '');
         
-        // Look for URLs
-        const urlRegex = /(https?:\/\/[^\s]+)/g;
-        let matches = cleanText.match(urlRegex);
+        // More comprehensive URL regex to catch different formats
+        const urlRegex = /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/gi;
         
-        if (matches) {
-            if (isFirstLink) {
-                // Replace the first link with a generic message
-                cleanText = cleanText.replace(urlRegex, 'See the link I shared in the thread');
-                // Remove any remaining links silently
-                cleanText = cleanText.replace(urlRegex, '');
-            } else {
-                // Remove all links silently
+        // Check if there are any URLs
+        const matches = cleanText.match(urlRegex);
+        
+        if (matches && matches.length > 0) {
+            // Replace first URL with message
+            cleanText = cleanText.replace(urlRegex, 'See the link I shared in the thread');
+            
+            // Find and remove any remaining URLs
+            const remainingUrls = cleanText.match(urlRegex);
+            if (remainingUrls && remainingUrls.length > 0) {
+                // Remove all remaining URLs
                 cleanText = cleanText.replace(urlRegex, '');
             }
         }
