@@ -325,7 +325,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let originalPostText = `${title}. `;
         if (text) {
             // Process text to handle links
-            originalPostText += processTextContent(text);
+            originalPostText += processTextContent(text, true);
         }
         
         // Determine if poster has multiple comments
@@ -364,7 +364,7 @@ document.addEventListener('DOMContentLoaded', () => {
             assignVoice(commenter);
             
             // Process text content (handle links)
-            let processedText = processTextContent(comment.text);
+            let processedText = processTextContent(comment.text, true);
             
             // Determine if user has multiple comments
             const hasMultipleComments = commentersCount[commenter] > 1;
@@ -419,29 +419,41 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Process text content to handle links properly
-    function processTextContent(text) {
-        // First, clean HTML tags
-        let cleanText = text.replace(/<[^>]*>/g, '');
+    function processTextContent(text, isFirstLink = true) {
+        // Create a temporary DOM element to parse HTML
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = text;
         
-        // More comprehensive URL regex to catch different formats
-        const urlRegex = /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/gi;
+        // Find all links
+        const links = tempDiv.querySelectorAll('a');
         
-        // Check if there are any URLs
-        const matches = cleanText.match(urlRegex);
-        
-        if (matches && matches.length > 0) {
-            // Replace first URL with message
-            cleanText = cleanText.replace(urlRegex, 'See the link I shared in the thread');
-            
-            // Find and remove any remaining URLs
-            const remainingUrls = cleanText.match(urlRegex);
-            if (remainingUrls && remainingUrls.length > 0) {
-                // Remove all remaining URLs
-                cleanText = cleanText.replace(urlRegex, '');
+        // Handle the links appropriately
+        if (links.length > 0) {
+            // Replace first link with message
+            if (isFirstLink) {
+                links[0].textContent = 'See the link I shared in the thread';
+                // Remove any remaining links (keep the text, remove the link)
+                for (let i = 1; i < links.length; i++) {
+                    const linkText = links[i].textContent;
+                    const textNode = document.createTextNode('');
+                    links[i].parentNode.replaceChild(textNode, links[i]);
+                }
+            } else {
+                // Remove all links silently (keep surrounding text)
+                for (let i = 0; i < links.length; i++) {
+                    const textNode = document.createTextNode('');
+                    links[i].parentNode.replaceChild(textNode, links[i]);
+                }
             }
         }
         
-        return cleanText;
+        // Get the processed text content
+        let processedText = tempDiv.textContent || tempDiv.innerText || '';
+        
+        // Clean any lingering HTML entities
+        processedText = processedText.replace(/&[#\w]+;/g, ' ');
+        
+        return processedText;
     }
 
     // Get a random introduction phrase
