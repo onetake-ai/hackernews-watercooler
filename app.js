@@ -48,6 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let selectedThreadIds = []; // Store selected thread IDs for multi-thread mode
     let lastProcessedCommentIndex = -1; // For resuming after errors
     let audioChapters = []; // Store chapter information for audio metadata
+    let pendingFetchPromises = []; // Track all fetch operations
 
     // Introduction phrases for variety
     const firstIntroductions = [
@@ -243,6 +244,15 @@ document.addEventListener('DOMContentLoaded', () => {
             customCommentLimitContainer.classList.add('hidden');
         }
         updateCostEstimate();
+    }
+
+    // Wait for all pending fetch operations to complete
+    async function waitForPendingFetches() {
+        if (pendingFetchPromises.length > 0) {
+            console.log(`Waiting for ${pendingFetchPromises.length} pending fetches to complete...`);
+            await Promise.allSettled(pendingFetchPromises);
+            console.log('All pending fetches completed.');
+        }
     }
 
     // Fetch top stories from HN API
@@ -481,6 +491,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 await processMultipleThreads(selectedThreadIds, apiKey, commentLimit);
             }
             
+            // Wait for any remaining fetch operations to complete
+            await waitForPendingFetches();
+            
             // Display result
             const finalAudio = await combineAudioBlobs(audioBlobs);
             displayResult(finalAudio);
@@ -623,6 +636,7 @@ document.addEventListener('DOMContentLoaded', () => {
         sharedLinks = [];
         lastProcessedCommentIndex = -1;
         audioChapters = [];
+        pendingFetchPromises = [];
         
         progressBar.style.width = '0%';
         progressStats.textContent = '0/0 comments processed';
@@ -652,58 +666,92 @@ document.addEventListener('DOMContentLoaded', () => {
     // Fetch thread data from Hacker News API
     async function fetchHNThread(threadId) {
         try {
-            const response = await fetch(`https://hacker-news.firebaseio.com/v0/item/${threadId}.json`);
+            // Create and store the fetch promise
+            const fetchPromise = fetch(`https://hacker-news.firebaseio.com/v0/item/${threadId}.json`);
+            pendingFetchPromises.push(fetchPromise);
+            
+            const response = await fetchPromise;
+            
+            // Remove from pending fetches once completed
+            const index = pendingFetchPromises.indexOf(fetchPromise);
+            if (index > -1) {
+                pendingFetchPromises.splice(index, 1);
+            }
+            
             if (!response.ok) {
                 throw new Error(`Failed to fetch thread: ${response.status}`);
             }
+            
             return await response.json();
         } catch (error) {
+            console.error(`Error fetching thread ${threadId}:`, error);
+            
+            // Remove from pending fetches if there was an error
+            pendingFetchPromises = pendingFetchPromises.filter(p => p !== fetchPromise);
+            
             throw new Error(`Error fetching thread: ${error.message}`);
         }
     }
 
     // Preprocess the thread to count comments and build the hierarchy
     async function preprocessThread(threadData, commentLimit) {
-        // Reset counts for this thread
-        commentersCount = {};
-        commentHierarchy = {};
-        
-        // Process the original post
-        const by = threadData.by;
-        commentersCount[by] = (commentersCount[by] || 0) + 1;
-        
-        // Add the original post to allComments
-        allComments.push({
-            id: threadData.id,
-            by: by,
-            text: threadData.text || '',
-            title: threadData.title,
-            isOriginalPost: true,
-            parent: null,
-            timestamp: threadData.time || Math.floor(Date.now() / 1000),
-            depth: 0 // Root level (original post)
-        });
-        
-        // Process all comments recursively in a breadth-first manner
-        await collectComments(threadData, commentLimit);
-        
-        // Count valid comments (excluding deleted, flagged, etc.)
-        totalComments = allComments.length;
-        
-        // Group comments by user
-        commentsByUser = {};
-        for (const comment of allComments) {
-            if (!commentsByUser[comment.by]) {
-                commentsByUser[comment.by] = [];
+        try {
+            // Reset counts for this thread
+            commentersCount = {};
+            commentHierarchy = {};
+            
+            // Process the original post
+            const by = threadData.by || 'anonymous';
+            commentersCount[by] = (commentersCount[by] || 0) + 1;
+            
+            // Add the original post to allComments
+            allComments.push({
+                id: threadData.id,
+                by: by,
+                text: threadData.text || '',
+                title: threadData.title,
+                isOriginalPost: true,
+                parent: null,
+                timestamp: threadData.time || Math.floor(Date.now() / 1000),
+                depth: 0, // Root level (original post)
+                score: threadData.score || 0
+            });
+            
+            // Process all comments recursively in a breadth-first manner
+            statusMessage.textContent = 'Collecting comments...';
+            await collectComments(threadData, commentLimit);
+            statusMessage.textContent = 'Comments collected. Processing...';
+            
+            // Make sure we've fetched everything
+            await waitForPendingFetches();
+            
+            // Count valid comments (excluding deleted, flagged, etc.)
+            totalComments = allComments.length;
+            
+            // Group comments by user
+            commentsByUser = {};
+            for (const comment of allComments) {
+                if (!commentsByUser[comment.by]) {
+                    commentsByUser[comment.by] = [];
+                }
+                commentsByUser[comment.by].push(comment);
             }
-            commentsByUser[comment.by].push(comment);
+            
+            // Sort comments to follow natural conversation thread order
+            sortCommentsInThreadOrder();
+            
+            // Update the progress UI
+            progressStats.textContent = `0/${totalComments} comments processed`;
+            
+            console.log(`Preprocessing complete: ${totalComments} total comments`);
+            if (totalComments <= 1) {
+                console.warn('No comments found in thread or all comments were invalid/deleted');
+            }
+        } catch (error) {
+            console.error('Error preprocessing thread:', error);
+            statusMessage.textContent = `Error preparing thread: ${error.message}`;
+            throw error;
         }
-        
-        // Sort comments to follow natural conversation thread order
-        sortCommentsInThreadOrder();
-        
-        // Update the progress UI
-        progressStats.textContent = `0/${totalComments} comments processed`;
     }
 
     // Recursively collect all comments in breadth-first order
@@ -713,22 +761,41 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         
-        // First collect all direct replies at this level
-        const directChildren = [];
+        // Get all comment IDs at this level
+        const commentIds = item.kids || [];
+        const fetchPromises = [];
+        const validComments = [];
         
-        for (const commentId of item.kids) {
+        // First fetch all comments at this level in parallel
+        for (const commentId of commentIds) {
             if (commentLimit !== null && allComments.length >= commentLimit + 1) {
                 break;
             }
             
-            const commentData = await fetchHNThread(commentId);
+            // Create a fetch promise for each comment
+            const fetchPromise = fetchHNThread(commentId).then(commentData => {
+                // Skip invalid, deleted, or dead comments
+                if (!commentData || !commentData.text || commentData.deleted || commentData.dead || commentData.flagged) {
+                    return null;
+                }
+                return commentData;
+            }).catch(error => {
+                console.error(`Error fetching comment ${commentId}:`, error);
+                return null;
+            });
             
-            // Skip invalid, deleted, flagged comments
-            if (!commentData || !commentData.text || commentData.deleted || commentData.dead || commentData.flagged) {
-                continue;
-            }
+            fetchPromises.push(fetchPromise);
+        }
+        
+        // Wait for all fetches at this level to complete
+        const commentsData = await Promise.all(fetchPromises);
+        
+        // Process valid comments
+        for (const commentData of commentsData) {
+            if (!commentData) continue;
             
             const commenter = commentData.by;
+            const commentId = commentData.id;
             
             // Add to our comment counts
             commentersCount[commenter] = (commentersCount[commenter] || 0) + 1;
@@ -744,88 +811,79 @@ document.addEventListener('DOMContentLoaded', () => {
                 parent: parentId,
                 isOriginalPost: false,
                 timestamp: commentData.time || Math.floor(Date.now() / 1000),
-                depth: depth + 1 // Increase depth for nested comments
+                depth: depth + 1,  // Increase depth for nested comments
+                score: commentData.score || 0  // Store score for sorting
             });
             
-            // Store for later processing of nested replies
-            directChildren.push(commentData);
+            // Store valid comments for recursive processing
+            validComments.push(commentData);
         }
         
         // Then process nested replies for each direct reply
-        for (const childComment of directChildren) {
-            await collectComments(childComment, commentLimit, childComment.id, depth + 1);
+        const nestedPromises = [];
+        for (const childComment of validComments) {
+            nestedPromises.push(collectComments(childComment, commentLimit, childComment.id, depth + 1));
         }
+        
+        // Wait for all nested comment processing to complete
+        await Promise.all(nestedPromises);
     }
     
-    // Sort comments to follow natural conversation thread order
+    // Sort comments to follow natural conversation thread order (like HN)
     function sortCommentsInThreadOrder() {
-        // First build a tree structure
-        const commentTree = {};
-        const rootId = allComments[0].id; // Original post
+        // First, organize comments into a tree structure
+        const commentsByParent = {};
+        const rootComment = allComments.find(c => c.isOriginalPost);
         
-        // Initialize with the root node
-        commentTree[rootId] = {
-            comment: allComments[0],
-            children: []
-        };
+        if (!rootComment) return;
         
-        // Add all other comments to the tree
+        // Group comments by their parent ID
         for (let i = 1; i < allComments.length; i++) {
             const comment = allComments[i];
-            commentTree[comment.id] = {
-                comment: comment,
-                children: []
-            };
+            if (!comment.parent) continue;
             
-            // Add this comment as a child to its parent
-            const parentId = comment.parent;
-            if (parentId && commentTree[parentId]) {
-                commentTree[parentId].children.push(comment.id);
+            if (!commentsByParent[comment.parent]) {
+                commentsByParent[comment.parent] = [];
             }
+            commentsByParent[comment.parent].push(comment);
         }
         
-        // Function to flatten the tree in natural reading order
-        function flattenTree(nodeId, result = []) {
-            // Add current node
-            result.push(commentTree[nodeId].comment);
+        // Sort each level by score (approximate HN's ranking) and timestamp
+        for (const parentId in commentsByParent) {
+            commentsByParent[parentId].sort((a, b) => {
+                // If scores are different, sort by score first (higher scores first)
+                if (a.score !== b.score) {
+                    return b.score - a.score;
+                }
+                // If same score, sort by timestamp (older first)
+                return a.timestamp - b.timestamp;
+            });
+        }
+        
+        // Function to traverse the tree in HN's display order
+        function traverseInOrder(commentId, result = []) {
+            // Add current comment to result
+            const comment = allComments.find(c => c.id === commentId);
+            if (comment) {
+                result.push(comment);
+            }
             
-            // Add all children, depth-first for each child branch
-            for (const childId of commentTree[nodeId].children) {
-                flattenTree(childId, result);
+            // Get all children of this comment
+            const children = commentsByParent[commentId] || [];
+            
+            // Add all children and their descendants
+            for (const child of children) {
+                traverseInOrder(child.id, result);
             }
             
             return result;
         }
         
-        // Flatten the tree starting from the root
-        allComments = flattenTree(rootId);
+        // Start with the root comment and traverse the tree
+        allComments = traverseInOrder(rootComment.id);
+        console.log(`Sorted ${allComments.length} comments in thread order`);
     }
-
-    // Fetch available voices from ElevenLabs
-    async function fetchElevenLabsVoices(apiKey) {
-        try {
-            const response = await fetch('https://api.elevenlabs.io/v1/voices', {
-                headers: {
-                    'xi-api-key': apiKey,
-                    'Content-Type': 'application/json'
-                }
-            });
-            
-            if (!response.ok) {
-                if (response.status === 401) {
-                    apiKeyError.textContent = 'Invalid API key. Please check and try again.';
-                    throw new Error('Invalid API key');
-                }
-                throw new Error(`Failed to fetch voices: ${response.status}`);
-            }
-            
-            const data = await response.json();
-            return data.voices || [];
-        } catch (error) {
-            throw new Error(`Error fetching voices: ${error.message}`);
-        }
-    }
-
+    
     // Process the entire thread
     async function processThread(threadData, apiKey) {
         // Start with the original post
@@ -874,11 +932,21 @@ document.addEventListener('DOMContentLoaded', () => {
         // Continue processing from comment index 1 (skip original post)
         await resumeProcessingComments(apiKey);
     }
-
+    
     // Resume processing comments from where we left off
     async function resumeProcessingComments(apiKey) {
+        console.log(`Resuming processing from comment index ${lastProcessedCommentIndex + 1}`);
+        
         // Start from the comment after the last processed one
         const startIndex = lastProcessedCommentIndex + 1;
+        
+        // Check if we have any comments to process
+        if (startIndex >= allComments.length) {
+            console.log('No more comments to process');
+            return;
+        }
+        
+        console.log(`Processing ${allComments.length - startIndex} remaining comments`);
         
         // Process comments in order
         let lastCommenter = startIndex > 0 ? allComments[lastProcessedCommentIndex].by : '';
@@ -887,6 +955,8 @@ document.addEventListener('DOMContentLoaded', () => {
         for (let i = startIndex; i < allComments.length; i++) {
             const comment = allComments[i];
             const commenter = comment.by;
+            
+            console.log(`Processing comment ${i+1}/${allComments.length} by ${commenter}`);
             
             // Add chapter marker for this comment
             const chapterStartTime = new Date().getTime();
@@ -942,25 +1012,33 @@ document.addEventListener('DOMContentLoaded', () => {
             // Add the comment text
             commentText += processedText;
             
-            // Generate audio for this comment
-            await generateAndAddAudio(commentText, voiceMapping[commenter], apiKey);
-            
-            // Add pause between comments (800ms silence)
-            const silenceBlob = generateSilence(800);
-            audioBlobs.push(silenceBlob);
-            
-            processedComments++;
-            lastProcessedCommentIndex = i;
-            updateProgress();
-            
-            lastCommenter = commenter;
-            lastCommentParent = comment.parent;
+            try {
+                // Generate audio for this comment
+                await generateAndAddAudio(commentText, voiceMapping[commenter], apiKey);
+                
+                // Add pause between comments (800ms silence)
+                const silenceBlob = generateSilence(800);
+                audioBlobs.push(silenceBlob);
+                
+                processedComments++;
+                lastProcessedCommentIndex = i;
+                updateProgress();
+                
+                lastCommenter = commenter;
+                lastCommentParent = comment.parent;
+            } catch (error) {
+                console.error(`Error processing comment ${i}:`, error);
+                // Don't throw here, just update status and show retry button
+                statusMessage.textContent = `Error processing comment: ${error.message}`;
+                retryBtn.classList.remove('hidden');
+                break;
+            }
         }
+        
+        console.log('Finished processing comments');
     }
-
-    // Process text content to handle links and quotes properly
-    function processTextContent(text) {
-        if (!text) return '';
+    
+if (!text) return '';
         
         // Create a temporary DOM element to parse HTML
         const tempDiv = document.createElement('div');
@@ -1068,245 +1146,3 @@ document.addEventListener('DOMContentLoaded', () => {
         
         return processedText;
     }
-
-    // Update the shared links display
-    function updateSharedLinksDisplay() {
-        if (sharedLinks.length === 0) {
-            linksContainer.classList.add('hidden');
-            return;
-        }
-        
-        linksContainer.classList.remove('hidden');
-        linksContent.innerHTML = '';
-        
-        const linksList = document.createElement('ul');
-        
-        sharedLinks.forEach((link, index) => {
-            const listItem = document.createElement('li');
-            const linkElement = document.createElement('a');
-            linkElement.href = link.href;
-            linkElement.textContent = link.text || link.href;
-            linkElement.target = '_blank';
-            linkElement.rel = 'noopener noreferrer';
-            
-            const commenterSpan = document.createElement('span');
-            commenterSpan.className = 'link-commenter';
-            commenterSpan.textContent = ` (shared by ${link.commenter})`;
-            
-            listItem.appendChild(linkElement);
-            listItem.appendChild(commenterSpan);
-            linksList.appendChild(listItem);
-        });
-        
-        linksContent.appendChild(linksList);
-    }
-
-    // Get a random introduction phrase
-    function getRandomPhrase(phrases, username = '') {
-        const randomIndex = Math.floor(Math.random() * phrases.length);
-        return phrases[randomIndex].replace('{username}', username);
-    }
-
-    // Assign a voice to a commenter
-    function assignVoice(username) {
-        if (voiceMapping[username]) {
-            return;
-        }
-        
-        // First, check if there's a voice with the same name as the username
-        const matchingVoice = availableVoices.find(voice => 
-            voice.name.toLowerCase() === username.toLowerCase()
-        );
-        
-        if (matchingVoice) {
-            voiceMapping[username] = {
-                voice_id: matchingVoice.voice_id,
-                name: matchingVoice.name,
-            };
-            return;
-        }
-        
-        // Deterministic voice assignment based on username
-        const usernameHash = hashString(username);
-        const voiceIndex = usernameHash % availableVoices.length;
-        const selectedVoice = availableVoices[voiceIndex];
-        
-        voiceMapping[username] = {
-            voice_id: selectedVoice.voice_id,
-            name: selectedVoice.name,
-        };
-    }
-
-    // Simple hash function for consistent voice assignment
-    function hashString(str) {
-        let hash = 0;
-        for (let i = 0; i < str.length; i++) {
-            hash = ((hash << 5) - hash) + str.charCodeAt(i);
-            hash = hash & hash; // Convert to 32bit integer
-        }
-        return Math.abs(hash);
-    }
-
-    // Add a chapter marker for audio metadata
-    function addChapterMarker(startTimeMs, title, subtitle = '') {
-        audioChapters.push({
-            startTime: startTimeMs,
-            title: title,
-            subtitle: subtitle
-        });
-    }
-
-    // Generate audio using ElevenLabs API
-    async function generateAndAddAudio(text, voice, apiKey) {
-        try {
-            // Count characters for cost estimation
-            totalCharacters += text.length;
-            costEstimate.textContent = `Processed: ~${Math.ceil(totalCharacters/1000)}k characters (${(Math.ceil(totalCharacters/1000) * 0.12).toFixed(2)})`;
-            
-            const response = await fetchWithRetry(() => 
-                fetch('https://api.elevenlabs.io/v1/text-to-speech/' + voice.voice_id, {
-                    method: 'POST',
-                    headers: {
-                        'xi-api-key': apiKey,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        text: text,
-                        model_id: 'eleven_multilingual_v2',
-                        voice_settings: {
-                            stability: 0.5,
-                            similarity_boost: 0.75
-                        }
-                    })
-                })
-            );
-            
-            if (!response.ok) {
-                throw new Error(`Failed to generate audio: ${response.status}`);
-            }
-            
-            const audioBlob = await response.blob();
-            audioBlobs.push(audioBlob);
-            
-            // For partial results: if we have processed comments, let's create a temporary result
-            if (processedComments > 0 && processedComments % 5 === 0) {
-                const partialAudio = await combineAudioBlobs(audioBlobs);
-                const tempUrl = URL.createObjectURL(partialAudio);
-                
-                // Update the audio element with partial result
-                if (!resultContainer.classList.contains('hidden')) {
-                    resultAudio.src = tempUrl;
-                }
-            }
-            
-        } catch (error) {
-            // Show retry button and what we've got so far
-            retryBtn.classList.remove('hidden');
-            
-            // Create partial audio result with what we have so far
-            if (audioBlobs.length > 0) {
-                const partialAudio = await combineAudioBlobs(audioBlobs);
-                displayResult(partialAudio);
-                statusMessage.textContent = `Error: ${error.message}. You can download partial audio or retry.`;
-            }
-            
-            throw new Error(`Error generating audio: ${error.message}`);
-        }
-    }
-
-    // Retry mechanism with exponential backoff
-    async function fetchWithRetry(fetchFunc, initialDelay = 500, maxRetries = MAX_RETRIES) {
-        let delay = initialDelay;
-        
-        for (let i = 0; i <= maxRetries; i++) {
-            try {
-                return await fetchFunc();
-            } catch (error) {
-                if (i === maxRetries) {
-                    throw error;
-                }
-                
-                // Check if it's a rate limit error
-                if (error.message && (error.message.includes('429') || error.message.includes('rate limit'))) {
-                    retryCount++;
-                    statusMessage.textContent = `Rate limited. Retrying in ${delay/1000} seconds...`;
-                    
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    delay *= 2; // Exponential backoff
-                    statusMessage.textContent = 'Retrying...';
-                } else {
-                    throw error;
-                }
-            }
-        }
-    }
-
-    // Generate silence as an audio blob
-    function generateSilence(durationMs) {
-        const sampleRate = 44100;
-        const numSamples = Math.floor(sampleRate * durationMs / 1000);
-        const buffer = new ArrayBuffer(numSamples * 2);
-        const view = new DataView(buffer);
-        
-        for (let i = 0; i < numSamples; i++) {
-            view.setInt16(i * 2, 0, true);
-        }
-        
-        return new Blob([view], { type: 'audio/wav' });
-    }
-
-    // Combine all audio blobs into one
-    async function combineAudioBlobs(blobs) {
-        if (blobs.length === 0) {
-            return new Blob([], { type: 'audio/mp3' });
-        }
-        
-        // For simplicity, we'll use the first audio format for all
-        // TODO: Add proper handling for chapter metadata
-        return new Blob(blobs, { type: blobs[0].type });
-    }
-
-    // Display the final audio result
-    function displayResult(audioBlob) {
-        const audioUrl = URL.createObjectURL(audioBlob);
-        resultAudio.src = audioUrl;
-        progressContainer.classList.add('hidden');
-        resultContainer.classList.remove('hidden');
-        
-        // Update download button text with file size
-        const fileSizeMB = (audioBlob.size / (1024 * 1024)).toFixed(2);
-        downloadBtn.textContent = `Download Audio (${fileSizeMB} MB)`;
-    }
-
-    // Update the progress UI
-    function updateProgress() {
-        const percentage = totalComments > 0 ? 
-            Math.floor((processedComments / totalComments) * 100) : 0;
-        
-        progressBar.style.width = `${percentage}%`;
-        progressStats.textContent = `${processedComments}/${totalComments} comments processed`;
-    }
-
-    // General error handler
-    function handleError(error) {
-        console.error(error);
-        statusMessage.textContent = `Error: ${error.message}`;
-        
-        // Show retry button if we have processed some comments
-        if (lastProcessedCommentIndex >= 0) {
-            retryBtn.classList.remove('hidden');
-        }
-    }
-
-    // Initialize the app
-    initializeUI();
-    
-    // Set up event listeners for dynamic inputs
-    threadUrlInput.addEventListener('input', updateCostEstimate);
-    apiKeyInput.addEventListener('input', () => {
-        apiKeyError.textContent = '';
-    });
-    
-    // Set up input event listeners for cost estimation
-    customCommentLimitInput.addEventListener('input', updateCostEstimate);
-});
