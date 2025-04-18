@@ -1172,22 +1172,3 @@ document.addEventListener('DOMContentLoaded', () => {
     // Set up input event listeners for cost estimation
     customCommentLimitInput.addEventListener('input', updateCostEstimate);
 });
-replyIntro} `;
-                }
-            }
-            
-            // Add user introduction if needed
-            if (hasMultipleComments) {
-                if (isFirstCommentByUser) {
-                    // First time this commenter speaks
-                    const introPhrase = getRandomPhrase(firstIntroductions, commenter);
-                    commentText += `${introPhrase} `;
-                } else if (!isSameAsLastCommenter) {
-                    // Returning commenter who wasn't the last speaker
-                    const returnIntro = getRandomPhrase(returnIntroductions, commenter);
-                    commentText += `${returnIntro} `;
-                }
-            } else if (!isSameAsLastCommenter) {
-                // Single comment user - always introduce themselves
-                const introPhrase = getRandomPhrase(firstIntroductions, commenter);
-                commentText += `${
