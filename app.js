@@ -829,8 +829,6 @@ document.addEventListener('DOMContentLoaded', () => {
         await Promise.all(nestedPromises);
     }
     
-}
-    
     // Sort comments to follow natural conversation thread order (like HN)
     function sortCommentsInThreadOrder() {
         // First, organize comments into a tree structure
