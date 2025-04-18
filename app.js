@@ -829,6 +829,8 @@ document.addEventListener('DOMContentLoaded', () => {
         await Promise.all(nestedPromises);
     }
     
+}
+    
     // Sort comments to follow natural conversation thread order (like HN)
     function sortCommentsInThreadOrder() {
         // First, organize comments into a tree structure
@@ -1038,7 +1040,9 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('Finished processing comments');
     }
     
-if (!text) return '';
+    // Process text content to handle links and quotes properly
+    function processTextContent(text) {
+        if (!text) return '';
         
         // Create a temporary DOM element to parse HTML
         const tempDiv = document.createElement('div');
@@ -1146,3 +1150,281 @@ if (!text) return '';
         
         return processedText;
     }
+
+    // Update the shared links display
+    function updateSharedLinksDisplay() {
+        if (sharedLinks.length === 0) {
+            linksContainer.classList.add('hidden');
+            return;
+        }
+        
+        linksContainer.classList.remove('hidden');
+        linksContent.innerHTML = '';
+        
+        const linksList = document.createElement('ul');
+        
+        sharedLinks.forEach((link, index) => {
+            const listItem = document.createElement('li');
+            const linkElement = document.createElement('a');
+            linkElement.href = link.href;
+            linkElement.textContent = link.text || link.href;
+            linkElement.target = '_blank';
+            linkElement.rel = 'noopener noreferrer';
+            
+            const commenterSpan = document.createElement('span');
+            commenterSpan.className = 'link-commenter';
+            commenterSpan.textContent = ` (shared by ${link.commenter})`;
+            
+            listItem.appendChild(linkElement);
+            listItem.appendChild(commenterSpan);
+            linksList.appendChild(listItem);
+        });
+        
+        linksContent.appendChild(linksList);
+    }
+
+    // Get a random introduction phrase
+    function getRandomPhrase(phrases, username = '') {
+        const randomIndex = Math.floor(Math.random() * phrases.length);
+        return phrases[randomIndex].replace('{username}', username);
+    }
+
+    // Assign a voice to a commenter
+    function assignVoice(username) {
+        if (voiceMapping[username]) {
+            return;
+        }
+        
+        // First, check if there's a voice with the same name as the username
+        const matchingVoice = availableVoices.find(voice => 
+            voice.name.toLowerCase() === username.toLowerCase()
+        );
+        
+        if (matchingVoice) {
+            voiceMapping[username] = {
+                voice_id: matchingVoice.voice_id,
+                name: matchingVoice.name,
+            };
+            return;
+        }
+        
+        // Deterministic voice assignment based on username
+        const usernameHash = hashString(username);
+        const voiceIndex = usernameHash % availableVoices.length;
+        const selectedVoice = availableVoices[voiceIndex];
+        
+        voiceMapping[username] = {
+            voice_id: selectedVoice.voice_id,
+            name: selectedVoice.name,
+        };
+    }
+
+    // Simple hash function for consistent voice assignment
+    function hashString(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            hash = ((hash << 5) - hash) + str.charCodeAt(i);
+            hash = hash & hash; // Convert to 32bit integer
+        }
+        return Math.abs(hash);
+    }
+
+    // Add a chapter marker for audio metadata
+    function addChapterMarker(startTimeMs, title, subtitle = '') {
+        audioChapters.push({
+            startTime: startTimeMs,
+            title: title,
+            subtitle: subtitle
+        });
+    }
+
+    // Generate audio using ElevenLabs API
+    async function generateAndAddAudio(text, voice, apiKey) {
+        try {
+            if (!text || !voice || !voice.voice_id) {
+                console.warn('Missing text or voice data:', { textLength: text?.length, voice });
+                return; // Skip this audio generation
+            }
+            
+            // Count characters for cost estimation
+            totalCharacters += text.length;
+            costEstimate.textContent = `Processed: ~${Math.ceil(totalCharacters/1000)}k characters (${(Math.ceil(totalCharacters/1000) * 0.12).toFixed(2)})`;
+            
+            console.log(`Generating audio for text (${text.length} chars) with voice: ${voice.name}`);
+            
+            const response = await fetchWithRetry(() => 
+                fetch('https://api.elevenlabs.io/v1/text-to-speech/' + voice.voice_id, {
+                    method: 'POST',
+                    headers: {
+                        'xi-api-key': apiKey,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        text: text,
+                        model_id: 'eleven_multilingual_v2',
+                        voice_settings: {
+                            stability: 0.5,
+                            similarity_boost: 0.75
+                        }
+                    })
+                })
+            );
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('ElevenLabs API error:', errorText);
+                throw new Error(`Failed to generate audio: ${response.status} - ${errorText}`);
+            }
+            
+            const audioBlob = await response.blob();
+            audioBlobs.push(audioBlob);
+            
+            // For partial results: if we have processed comments, let's create a temporary result
+            if (processedComments > 0 && processedComments % 5 === 0) {
+                const partialAudio = await combineAudioBlobs(audioBlobs);
+                const tempUrl = URL.createObjectURL(partialAudio);
+                
+                // Update the audio element with partial result
+                if (!resultContainer.classList.contains('hidden')) {
+                    resultAudio.src = tempUrl;
+                }
+            }
+            
+        } catch (error) {
+            console.error('Error generating audio:', error);
+            
+            // Show retry button and what we've got so far
+            retryBtn.classList.remove('hidden');
+            
+            // Create partial audio result with what we have so far
+            if (audioBlobs.length > 0) {
+                const partialAudio = await combineAudioBlobs(audioBlobs);
+                displayResult(partialAudio);
+                statusMessage.textContent = `Error: ${error.message}. You can download partial audio or retry.`;
+            }
+            
+            throw error;
+        }
+    }
+
+    // Retry mechanism with exponential backoff
+    async function fetchWithRetry(fetchFunc, initialDelay = 500, maxRetries = MAX_RETRIES) {
+        let delay = initialDelay;
+        
+        for (let i = 0; i <= maxRetries; i++) {
+            try {
+                return await fetchFunc();
+            } catch (error) {
+                if (i === maxRetries) {
+                    throw error;
+                }
+                
+                // Check if it's a rate limit error
+                if (error.message && (error.message.includes('429') || error.message.includes('rate limit'))) {
+                    retryCount++;
+                    statusMessage.textContent = `Rate limited. Retrying in ${delay/1000} seconds...`;
+                    
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    delay *= 2; // Exponential backoff
+                    statusMessage.textContent = 'Retrying...';
+                } else {
+                    throw error;
+                }
+            }
+        }
+    }
+
+    // Generate silence as an audio blob
+    function generateSilence(durationMs) {
+        const sampleRate = 44100;
+        const numSamples = Math.floor(sampleRate * durationMs / 1000);
+        const buffer = new ArrayBuffer(numSamples * 2);
+        const view = new DataView(buffer);
+        
+        for (let i = 0; i < numSamples; i++) {
+            view.setInt16(i * 2, 0, true);
+        }
+        
+        return new Blob([view], { type: 'audio/wav' });
+    }
+
+    // Combine all audio blobs into one
+    async function combineAudioBlobs(blobs) {
+        if (blobs.length === 0) {
+            return new Blob([], { type: 'audio/mp3' });
+        }
+        
+        // For simplicity, we'll use the first audio format for all
+        // TODO: Add proper handling for chapter metadata
+        return new Blob(blobs, { type: blobs[0].type });
+    }
+
+    // Display the final audio result
+    function displayResult(audioBlob) {
+        const audioUrl = URL.createObjectURL(audioBlob);
+        resultAudio.src = audioUrl;
+        progressContainer.classList.add('hidden');
+        resultContainer.classList.remove('hidden');
+        
+        // Update download button text with file size
+        const fileSizeMB = (audioBlob.size / (1024 * 1024)).toFixed(2);
+        downloadBtn.textContent = `Download Audio (${fileSizeMB} MB)`;
+    }
+
+    // Update the progress UI
+    function updateProgress() {
+        const percentage = totalComments > 0 ? 
+            Math.floor((processedComments / totalComments) * 100) : 0;
+        
+        progressBar.style.width = `${percentage}%`;
+        progressStats.textContent = `${processedComments}/${totalComments} comments processed`;
+    }
+
+    // General error handler
+    function handleError(error) {
+        console.error(error);
+        statusMessage.textContent = `Error: ${error.message}`;
+        
+        // Show retry button if we have processed some comments
+        if (lastProcessedCommentIndex >= 0) {
+            retryBtn.classList.remove('hidden');
+        }
+    }
+
+    // Fetch available voices from ElevenLabs
+    async function fetchElevenLabsVoices(apiKey) {
+        try {
+            const response = await fetch('https://api.elevenlabs.io/v1/voices', {
+                headers: {
+                    'xi-api-key': apiKey,
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                if (response.status === 401) {
+                    apiKeyError.textContent = 'Invalid API key. Please check and try again.';
+                    throw new Error('Invalid API key');
+                }
+                throw new Error(`Failed to fetch voices: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            return data.voices || [];
+        } catch (error) {
+            throw new Error(`Error fetching voices: ${error.message}`);
+        }
+    }
+
+    // Initialize the app
+    initializeUI();
+    
+    // Set up event listeners for dynamic inputs
+    threadUrlInput.addEventListener('input', updateCostEstimate);
+    apiKeyInput.addEventListener('input', () => {
+        apiKeyError.textContent = '';
+    });
+    
+    // Set up input event listeners for cost estimation
+    customCommentLimitInput.addEventListener('input', updateCostEstimate);
+});
