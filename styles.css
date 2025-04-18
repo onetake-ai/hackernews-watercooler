@@ -7,6 +7,8 @@
     --error-color: #e53935;
     --success-color: #43a047;
     --shadow-color: rgba(0, 0, 0, 0.1);
+    --tooltip-bg: #333;
+    --tooltip-text: #fff;
 }
 
 .dark-mode {
@@ -16,6 +18,8 @@
     --secondary-color: #2c2c2c;
     --border-color: #444444;
     --shadow-color: rgba(0, 0, 0, 0.3);
+    --tooltip-bg: #555;
+    --tooltip-text: #f0f0f0;
 }
 
 * {
@@ -68,7 +72,7 @@ label {
     font-weight: 600;
 }
 
-input {
+input, select {
     width: 100%;
     padding: 0.75rem;
     border: 1px solid var(--border-color);
@@ -78,7 +82,7 @@ input {
     font-size: 1rem;
 }
 
-input:focus {
+input:focus, select:focus {
     outline: 2px solid var(--primary-color);
     border-color: transparent;
 }
@@ -98,6 +102,14 @@ button:hover {
     background-color: #e05800;
 }
 
+.secondary-btn {
+    background-color: #666;
+}
+
+.secondary-btn:hover {
+    background-color: #555;
+}
+
 .input-wrapper {
     position: relative;
 }
@@ -112,6 +124,47 @@ button:hover {
     color: var(--text-color);
     padding: 0;
     cursor: pointer;
+}
+
+.info-tooltip {
+    position: absolute;
+    right: 40px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-color);
+    font-size: 1.2rem;
+    cursor: pointer;
+}
+
+.tooltip {
+    display: none;
+    position: absolute;
+    width: 300px;
+    background: var(--tooltip-bg);
+    color: var(--tooltip-text);
+    padding: 1rem;
+    border-radius: 4px;
+    top: 40px;
+    right: 0;
+    z-index: 100;
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+
+.tooltip.visible {
+    display: block;
+}
+
+.tooltip h4 {
+    margin-bottom: 0.5rem;
+}
+
+.tooltip p {
+    margin-bottom: 0.5rem;
+}
+
+.tooltip ul {
+    margin-left: 1.5rem;
+    margin-bottom: 0.5rem;
 }
 
 .error-message {
@@ -161,6 +214,12 @@ button:hover {
     box-shadow: 0 2px 8px var(--shadow-color);
 }
 
+.result-buttons {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
 audio {
     width: 100%;
     margin: 1rem 0;
@@ -177,8 +236,128 @@ footer {
     display: none;
 }
 
-#download-btn {
+.cost-estimate {
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    background-color: var(--secondary-color);
+    border-radius: 4px;
+    text-align: center;
+    font-size: 0.9rem;
+}
+
+.input-mode {
+    margin-bottom: 1.5rem;
+}
+
+#custom-comment-limit-container {
+    margin-top: 0.5rem;
+}
+
+/* Story selector styles */
+.stories-container {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.5rem;
+    margin-top: 0.5rem;
+    background-color: var(--bg-color);
+}
+
+.story-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.story-item {
+    display: flex;
+    padding: 0.5rem;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+}
+
+.story-item:hover {
+    background-color: var(--secondary-color);
+}
+
+.story-item input[type="checkbox"] {
+    width: auto;
+    margin-right: 0.75rem;
+    cursor: pointer;
+}
+
+.story-item label {
+    display: flex;
+    flex-direction: column;
+    cursor: pointer;
+    margin-bottom: 0;
+}
+
+.story-title {
+    font-weight: 600;
+}
+
+.story-meta {
+    font-size: 0.8rem;
+    color: #666;
+}
+
+/* Shared links container */
+.shared-links-container {
+    margin-top: 2rem;
+    padding: 1rem;
+    background-color: var(--secondary-color);
+    border-radius: 8px;
+}
+
+.shared-links-container h3 {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.toggle-btn {
+    background: none;
+    border: none;
+    color: var(--text-color);
+    cursor: pointer;
+    padding: 0.25rem;
+}
+
+.shared-links-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease-out;
+}
+
+.shared-links-content.expanded {
+    max-height: 500px;
+}
+
+.shared-links-content ul {
+    list-style-type: none;
     margin-top: 1rem;
+}
+
+.shared-links-content li {
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.shared-links-content a {
+    color: var(--primary-color);
+    text-decoration: none;
+}
+
+.shared-links-content a:hover {
+    text-decoration: underline;
+}
+
+.link-commenter {
+    font-size: 0.8rem;
+    color: #666;
 }
 
 @media (max-width: 600px) {
@@ -188,5 +367,15 @@ footer {
     
     h1 {
         font-size: 1.5rem;
+    }
+    
+    .tooltip {
+        width: 250px;
+        left: 0;
+        right: auto;
+    }
+    
+    .result-buttons {
+        flex-direction: column;
     }
 }
