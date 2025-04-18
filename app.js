@@ -756,7 +756,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Resume processing comments from where we left off
-    async function resumeProcessingComments(apiKey) {
+async function resumeProcessingComments(apiKey) {
         // Start from the comment after the last processed one
         const startIndex = lastProcessedCommentIndex + 1;
         
@@ -798,7 +798,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (parentComment) {
                     const parentUsername = parentComment.by;
                     const replyIntro = getRandomPhrase(replyIntroductions, parentUsername);
+                    commentText += `${replyIntro} `;
+                }
+            }
+            
+            // Add user introduction if needed
+            if (hasMultipleComments) {
+                if (isFirstCommentByUser) {
+                    // First time this commenter speaks
+                    const introPhrase = getRandomPhrase(firstIntroductions, commenter);
                     commentText += `${introPhrase} `;
+                } else if (!isSameAsLastCommenter) {
+                    // Returning commenter who wasn't the last speaker
+                    const returnIntro = getRandomPhrase(returnIntroductions, commenter);
+                    commentText += `${returnIntro} `;
+                }
+            } else if (!isSameAsLastCommenter) {
+                // Single comment user - always introduce themselves
+                const introPhrase = getRandomPhrase(firstIntroductions, commenter);
+                commentText += `${introPhrase} `;
             }
             
             // Add the comment text
