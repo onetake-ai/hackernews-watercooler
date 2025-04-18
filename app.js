@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // v2.1.0
+    // v2.2.0
 
     // DOM Elements
     const form = document.getElementById('audio-form');
@@ -757,7 +757,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Recursively collect all comments in breadth-first order
-    // Improved collectComments function with better hierarchy tracking
     async function collectComments(item, commentLimit, parentId = null, depth = 0) {
         if (!item.kids || (commentLimit !== null && allComments.length >= commentLimit + 1)) {
             // +1 because the original post doesn't count against the limit
@@ -834,21 +833,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // Sort comments to follow natural conversation thread order (like HN)
+    // Simplified sortCommentsInThreadOrder function - maintains depth-first order
     function sortCommentsInThreadOrder() {
-        // First, make sure we have comments
-        if (allComments.length <= 1) return;
-    
-        // Create a more advanced tree structure
-        const commentsByParent = {};
-        const rootComment = allComments.find(c => c.isOriginalPost);
+        // The depth-first collection already creates the right order,
+        // but we still need to handle any basic sorting at each level
         
-        if (!rootComment) return;
+        if (allComments.length <= 1) return;
+        
+        // We'll only sort siblings (comments with the same parent) for better HN-like ordering
+        const commentsByParent = {};
         
         // Group comments by their parent ID
         for (let i = 0; i < allComments.length; i++) {
             const comment = allComments[i];
-            if (!comment.parent && !comment.isOriginalPost) continue;
-            
             const parentId = comment.parent || 'root';
             
             if (!commentsByParent[parentId]) {
@@ -874,49 +871,55 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
         
-        // Function to traverse the tree in HN's display order
-        function traverseInOrder(currentNodeId, result = []) {
-            // Add current comment if it exists
-            if (currentNodeId === 'root') {
-                // Add root comment
-                const root = allComments.find(c => c.isOriginalPost);
-                if (root) result.push(root);
-            } else {
-                const comment = allComments.find(c => c.id === currentNodeId);
-                if (comment) result.push(comment);
-            }
-            
-            // Process children in sorted order
-            const children = commentsByParent[currentNodeId] || [];
-            for (const child of children) {
-                if (!child.isOriginalPost) { // Skip root to avoid duplicates
-                    traverseInOrder(child.id, result);
-                }
-            }
-            
-            return result;
+        // Now rebuild allComments in the same depth-first manner but with sorted siblings
+        const newComments = [];
+        const processed = new Set();
+        
+        // Start with the original post
+        const rootComment = allComments.find(c => c.isOriginalPost);
+        if (rootComment) {
+            newComments.push(rootComment);
+            processed.add(rootComment.id);
         }
         
-        // Start with the root comment and traverse the tree
-        const sortedComments = traverseInOrder('root');
+        // Function to add children in sorted order
+        function addChildren(parentId) {
+            const children = commentsByParent[parentId] || [];
+            // Only process non-original-post children that haven't been processed
+            for (const child of children) {
+                if (!child.isOriginalPost && !processed.has(child.id)) {
+                    newComments.push(child);
+                    processed.add(child.id);
+                    // Recursively add this child's children (depth-first)
+                    addChildren(child.id);
+                }
+            }
+        }
         
-        // Verify that we haven't lost any comments
-        if (sortedComments.length !== allComments.length) {
-            console.warn(`Warning: Comment count mismatch after sorting. Original: ${allComments.length}, Sorted: ${sortedComments.length}`);
+        // Start with root's children
+        if (rootComment) {
+            addChildren(rootComment.id);
+        }
+        
+        // Check if we've processed all comments
+        if (newComments.length !== allComments.length) {
+            console.warn(`Warning: Comment count mismatch after sorting. Original: ${allComments.length}, Sorted: ${newComments.length}`);
+            
             // Log the missing comments for debugging
-            const sortedIds = new Set(sortedComments.map(c => c.id));
+            const sortedIds = new Set(newComments.map(c => c.id));
             const missingComments = allComments.filter(c => !sortedIds.has(c.id));
             console.log('Missing comments:', missingComments);
             
-            // If we lost comments, just keep the original order to avoid data loss
-            if (sortedComments.length < allComments.length) {
-                console.log('Using original comment order to prevent data loss');
-                return;
+            // If we're missing comments, add them to the end to avoid data loss
+            for (const comment of allComments) {
+                if (!sortedIds.has(comment.id)) {
+                    newComments.push(comment);
+                }
             }
         }
         
-        // Update allComments with sorted order
-        allComments = sortedComments;
+        // Update allComments with the new order
+        allComments = newComments;
         console.log(`Sorted ${allComments.length} comments in thread order`);
     }
     
