@@ -221,9 +221,16 @@ document.addEventListener('DOMContentLoaded', () => {
             urlInputContainer.classList.remove('hidden');
             threadSelectorContainer.classList.add('hidden');
             selectedThreadIds = [];
+            
+            // Make URL input required when in URL mode
+            threadUrlInput.setAttribute('required', '');
         } else {
             urlInputContainer.classList.add('hidden');
             threadSelectorContainer.classList.remove('hidden');
+            
+            // Remove required attribute when not in URL mode
+            threadUrlInput.removeAttribute('required');
+            
             fetchTopStories();
         }
     }
@@ -428,6 +435,24 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         
+        // Validate based on input mode
+        if (inputModeSelector.value === 'url') {
+            const threadUrl = threadUrlInput.value.trim();
+            
+            // Validate URL for URL input mode
+            if (!threadUrl || !threadUrl.includes('news.ycombinator.com')) {
+                urlError.textContent = 'Please enter a valid Hacker News thread URL';
+                threadUrlInput.focus();
+                return;
+            }
+        } else {
+            // Validate selected threads for top stories mode
+            if (selectedThreadIds.length === 0) {
+                statusMessage.textContent = 'Please select at least one thread';
+                return;
+            }
+        }
+        
         // Start processing
         generateBtn.disabled = true;
         progressContainer.classList.remove('hidden');
@@ -443,14 +468,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Single thread mode
                 const threadUrl = threadUrlInput.value.trim();
                 
-                // Validate URL
-                if (!threadUrl || !threadUrl.includes('news.ycombinator.com')) {
-                    urlError.textContent = 'Please enter a valid Hacker News thread URL';
-                    threadUrlInput.focus();
-                    generateBtn.disabled = false;
-                    return;
-                }
-                
                 // Extract thread ID from URL
                 const threadId = extractThreadId(threadUrl);
                 if (!threadId) {
@@ -461,13 +478,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 await processSingleThread(threadId, apiKey, commentLimit);
             } else {
                 // Multi-thread mode
-                if (selectedThreadIds.length === 0) {
-                    statusMessage.textContent = 'Please select at least one thread';
-                    generateBtn.disabled = false;
-                    return;
-                }
-                
-                // Process multiple threads
                 await processMultipleThreads(selectedThreadIds, apiKey, commentLimit);
             }
             
