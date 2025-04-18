@@ -680,10 +680,11 @@ document.addEventListener('DOMContentLoaded', () => {
             title: threadData.title,
             isOriginalPost: true,
             parent: null,
-            timestamp: threadData.time || Math.floor(Date.now() / 1000)
+            timestamp: threadData.time || Math.floor(Date.now() / 1000),
+            depth: 0 // Root level (original post)
         });
         
-        // Process all comments recursively
+        // Process all comments recursively in a breadth-first manner
         await collectComments(threadData, commentLimit);
         
         // Count valid comments (excluding deleted, flagged, etc.)
@@ -698,19 +699,22 @@ document.addEventListener('DOMContentLoaded', () => {
             commentsByUser[comment.by].push(comment);
         }
         
-        // Sort comments by timestamp (ensure chronological order)
-        allComments.sort((a, b) => a.timestamp - b.timestamp);
+        // Sort comments to follow natural conversation thread order
+        sortCommentsInThreadOrder();
         
         // Update the progress UI
         progressStats.textContent = `0/${totalComments} comments processed`;
     }
 
-    // Recursively collect all comments
-    async function collectComments(item, commentLimit, parentId = null) {
+    // Recursively collect all comments in breadth-first order
+    async function collectComments(item, commentLimit, parentId = null, depth = 0) {
         if (!item.kids || (commentLimit !== null && allComments.length >= commentLimit + 1)) {
             // +1 because the original post doesn't count against the limit
             return;
         }
+        
+        // First collect all direct replies at this level
+        const directChildren = [];
         
         for (const commentId of item.kids) {
             if (commentLimit !== null && allComments.length >= commentLimit + 1) {
@@ -739,12 +743,62 @@ document.addEventListener('DOMContentLoaded', () => {
                 text: commentData.text,
                 parent: parentId,
                 isOriginalPost: false,
-                timestamp: commentData.time || Math.floor(Date.now() / 1000)
+                timestamp: commentData.time || Math.floor(Date.now() / 1000),
+                depth: depth + 1 // Increase depth for nested comments
             });
             
-            // Process nested comments recursively
-            await collectComments(commentData, commentLimit, commentId);
+            // Store for later processing of nested replies
+            directChildren.push(commentData);
         }
+        
+        // Then process nested replies for each direct reply
+        for (const childComment of directChildren) {
+            await collectComments(childComment, commentLimit, childComment.id, depth + 1);
+        }
+    }
+    
+    // Sort comments to follow natural conversation thread order
+    function sortCommentsInThreadOrder() {
+        // First build a tree structure
+        const commentTree = {};
+        const rootId = allComments[0].id; // Original post
+        
+        // Initialize with the root node
+        commentTree[rootId] = {
+            comment: allComments[0],
+            children: []
+        };
+        
+        // Add all other comments to the tree
+        for (let i = 1; i < allComments.length; i++) {
+            const comment = allComments[i];
+            commentTree[comment.id] = {
+                comment: comment,
+                children: []
+            };
+            
+            // Add this comment as a child to its parent
+            const parentId = comment.parent;
+            if (parentId && commentTree[parentId]) {
+                commentTree[parentId].children.push(comment.id);
+            }
+        }
+        
+        // Function to flatten the tree in natural reading order
+        function flattenTree(nodeId, result = []) {
+            // Add current node
+            result.push(commentTree[nodeId].comment);
+            
+            // Add all children, depth-first for each child branch
+            for (const childId of commentTree[nodeId].children) {
+                flattenTree(childId, result);
+            }
+            
+            return result;
+        }
+        
+        // Flatten the tree starting from the root
+        allComments = flattenTree(rootId);
     }
 
     // Fetch available voices from ElevenLabs
