@@ -31,19 +31,57 @@
                         <button type="button" class="toggle-password" aria-label="Show/hide password">
                             <i class="fas fa-eye"></i>
                         </button>
+                        <a href="#" id="api-key-info" class="info-tooltip" aria-label="Learn about API key permissions">
+                            <i class="fas fa-info-circle"></i>
+                        </a>
+                        <div id="api-tooltip" class="tooltip">
+                            <h4>API Key Information</h4>
+                            <p>You need an ElevenLabs API key to use this app. Sign up at elevenlabs.io to get your key.</p>
+                            <p>Required permissions:</p>
+                            <ul>
+                                <li>Text-to-Speech generation</li>
+                                <li>Voice listing</li>
+                            </ul>
+                            <p>Your API key stays in your browser and is never sent to our servers.</p>
+                        </div>
                     </div>
                     <div class="error-message" id="api-key-error"></div>
                 </div>
 
-                <div class="form-group">
+                <div class="form-group input-mode">
+                    <label for="input-mode-selector">Select input mode:</label>
+                    <select id="input-mode-selector">
+                        <option value="url">Enter a thread URL</option>
+                        <option value="top">Select from top stories</option>
+                    </select>
+                </div>
+
+                <div id="url-input-container" class="form-group">
                     <label for="hn-thread-url">Hacker News Thread URL:</label>
                     <input type="url" id="hn-thread-url" placeholder="https://news.ycombinator.com/item?id=..." required>
                     <div class="error-message" id="url-error"></div>
                 </div>
 
-                <div class="form-group">
-                    <label for="comment-limit">Number of comments to include:</label>
-                    <input type="number" id="comment-limit" value="100" min="1" max="300">
+                <div id="thread-selector-container" class="form-group hidden">
+                    <label>Select threads to include:</label>
+                    <div id="top-stories-container" class="stories-container">
+                        <p>Loading top stories...</p>
+                    </div>
+                </div>
+
+                <div id="comment-limit-container" class="form-group">
+                    <label for="comment-limit-select">Number of comments to include:</label>
+                    <select id="comment-limit-select">
+                        <option value="all" selected>All comments</option>
+                        <option value="custom">Custom limit</option>
+                    </select>
+                    <div id="custom-comment-limit-container" class="hidden">
+                        <input type="number" id="custom-comment-limit" value="100" min="1">
+                    </div>
+                </div>
+
+                <div id="cost-estimate" class="cost-estimate">
+                    Enter a thread URL to see cost estimate
                 </div>
 
                 <button type="submit" id="generate-btn">Generate Conversation</button>
@@ -66,7 +104,15 @@
             <div id="result-container" class="hidden">
                 <h3>Generated Audio</h3>
                 <audio id="result-audio" controls></audio>
-                <button id="download-btn">Download Audio</button>
+                <div class="result-buttons">
+                    <button id="download-btn">Download Audio</button>
+                    <button id="retry-btn" class="hidden secondary-btn">Retry from where we left off</button>
+                </div>
+            </div>
+
+            <div id="shared-links-container" class="shared-links-container hidden">
+                <h3>Shared Links <button id="shared-links-toggle" class="toggle-btn"><i class="fas fa-chevron-down"></i></button></h3>
+                <div id="shared-links-content" class="shared-links-content"></div>
             </div>
         </main>
 
