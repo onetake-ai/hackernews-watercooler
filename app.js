@@ -317,38 +317,94 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Update cost estimate based on current settings
-    function updateCostEstimate() {
-        // Can't estimate until we know about data
-        if (inputModeSelector.value === 'url' && !threadUrlInput.value) {
-            costEstimate.textContent = 'Enter a thread URL to see cost estimate';
-            return;
+    async function updateCostEstimate() {
+        try {
+            // Can't estimate until we know about data
+            if (inputModeSelector.value === 'url' && !threadUrlInput.value) {
+                costEstimate.textContent = 'Enter a thread URL to see cost estimate';
+                return;
+            }
+            
+            if (inputModeSelector.value === 'top' && selectedThreadIds.length === 0) {
+                costEstimate.textContent = 'Select threads to see cost estimate';
+                return;
+            }
+            
+            costEstimate.textContent = 'Calculating estimate...';
+            
+            // Get estimated character count
+            const estimatedChars = await getEstimatedCharCount();
+            const estimatedCost = Math.ceil(estimatedChars / 1000) * 0.12;
+            
+            costEstimate.textContent = `Estimated: ~${Math.ceil(estimatedChars/1000)}k characters (${estimatedCost.toFixed(2)})`;
+        } catch (error) {
+            console.error("Error updating cost estimate:", error);
+            costEstimate.textContent = 'Unable to calculate estimate';
         }
-        
-        if (inputModeSelector.value === 'top' && selectedThreadIds.length === 0) {
-            costEstimate.textContent = 'Select threads to see cost estimate';
-            return;
-        }
-        
-        // Rough estimate based on average comment length
-        const AVG_CHARS_PER_COMMENT = 500; // Rough estimate
-        let estimatedCommentCount = 0;
+    }
+    
+    // Get a more accurate character count estimate
+    async function getEstimatedCharCount() {
+        const AVG_CHARS_PER_COMMENT = 500; // Base estimate
         
         if (inputModeSelector.value === 'url') {
-            estimatedCommentCount = commentLimitSelect.value === 'all' ? 50 : parseInt(customCommentLimitInput.value, 10) || 50;
-        } else {
-            // For multiple threads, use a rough estimate based on selected count
-            const avgCommentsPerThread = 25;
-            estimatedCommentCount = selectedThreadIds.length * avgCommentsPerThread;
-            if (commentLimitSelect.value === 'custom') {
-                const customLimit = parseInt(customCommentLimitInput.value, 10) || 50;
-                estimatedCommentCount = Math.min(estimatedCommentCount, customLimit);
+            const threadUrl = threadUrlInput.value.trim();
+            const threadId = extractThreadId(threadUrl);
+            
+            if (threadId) {
+                // Actually fetch the thread to get real data
+                const threadData = await fetchThreadMetadata(threadId);
+                if (threadData && threadData.descendants !== undefined) {
+                    // Use 70% of the descendants count as a more realistic estimate
+                    // of valid comments (accounting for deleted/flagged comments)
+                    const validCommentsEstimate = Math.ceil(threadData.descendants * 0.7);
+                    const estimatedComments = commentLimitSelect.value === 'all' 
+                        ? validCommentsEstimate
+                        : Math.min(parseInt(customCommentLimitInput.value, 10) || 0, validCommentsEstimate);
+                    
+                    return estimatedComments * AVG_CHARS_PER_COMMENT;
+                }
             }
+            
+            // Fallback if we can't get thread data
+            return 50 * AVG_CHARS_PER_COMMENT;
+        } else {
+            // Multiple threads mode
+            let totalEstimatedComments = 0;
+            
+            // Process each selected thread
+            for (const threadId of selectedThreadIds) {
+                const threadData = await fetchThreadMetadata(threadId);
+                if (threadData && threadData.descendants !== undefined) {
+                    // Same 70% rule for valid comments
+                    totalEstimatedComments += Math.ceil(threadData.descendants * 0.7);
+                } else {
+                    totalEstimatedComments += 25; // Default fallback estimate
+                }
+            }
+            
+            // Apply custom limit if needed
+            if (commentLimitSelect.value === 'custom') {
+                const customLimit = parseInt(customCommentLimitInput.value, 10) || 0;
+                if (customLimit > 0) {
+                    totalEstimatedComments = Math.min(totalEstimatedComments, customLimit);
+                }
+            }
+            
+            return totalEstimatedComments * AVG_CHARS_PER_COMMENT;
         }
-        
-        const estimatedChars = estimatedCommentCount * AVG_CHARS_PER_COMMENT;
-        const estimatedCost = Math.ceil(estimatedChars / 1000) * 0.12;
-        
-        costEstimate.textContent = `Estimated: ~${Math.ceil(estimatedChars/1000)}k characters ($${estimatedCost.toFixed(2)})`;
+    }
+    
+    // Fetch thread metadata for estimation
+    async function fetchThreadMetadata(threadId) {
+        try {
+            const response = await fetch(`https://hacker-news.firebaseio.com/v0/item/${threadId}.json`);
+            if (!response.ok) return null;
+            return await response.json();
+        } catch (error) {
+            console.error("Error fetching thread metadata:", error);
+            return null;
+        }
     }
 
     // Form submission
@@ -756,7 +812,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Resume processing comments from where we left off
-async function resumeProcessingComments(apiKey) {
+    async function resumeProcessingComments(apiKey) {
         // Start from the comment after the last processed one
         const startIndex = lastProcessedCommentIndex + 1;
         
