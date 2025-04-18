@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // v2.2.0
+    // v2.3.0
 
     // DOM Elements
     const form = document.getElementById('audio-form');
@@ -695,7 +695,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Preprocess the thread to count comments and build the hierarchy
+    // Preprocess the thread to count comments and build the hierarchy. Build commentsByUser AFTER sorting
     async function preprocessThread(threadData, commentLimit) {
         try {
             // Reset counts for this thread
@@ -719,7 +719,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 score: threadData.score || 0
             });
             
-            // Process all comments recursively in a breadth-first manner
+            // Process all comments recursively in a depth-first manner
             statusMessage.textContent = 'Collecting comments...';
             await collectComments(threadData, commentLimit);
             statusMessage.textContent = 'Comments collected. Processing...';
@@ -730,17 +730,19 @@ document.addEventListener('DOMContentLoaded', () => {
             // Count valid comments (excluding deleted, flagged, etc.)
             totalComments = allComments.length;
             
-            // Group comments by user
+            // Sort comments to follow natural conversation thread order
+            sortCommentsInThreadOrder();
+            
+            // IMPORTANT: Only build commentsByUser AFTER sorting to ensure 
+            // "first time speaking" is based on the actual order of appearance
             commentsByUser = {};
-            for (const comment of allComments) {
+            for (let i = 0; i < allComments.length; i++) {
+                const comment = allComments[i];
                 if (!commentsByUser[comment.by]) {
                     commentsByUser[comment.by] = [];
                 }
                 commentsByUser[comment.by].push(comment);
             }
-            
-            // Sort comments to follow natural conversation thread order
-            sortCommentsInThreadOrder();
             
             // Update the progress UI
             progressStats.textContent = `0/${totalComments} comments processed`;
@@ -973,7 +975,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // Resume processing comments from where we left off
-    // Updated resumeProcessingComments function to properly handle comment processing
     async function resumeProcessingComments(apiKey) {
         console.log(`Resuming processing from comment index ${lastProcessedCommentIndex + 1}`);
         
@@ -987,6 +988,21 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         console.log(`Processing ${allComments.length - startIndex} remaining comments`);
+        
+        // Track who has already spoken
+        const hasSpoken = new Set();
+        
+        // The original poster has already spoken
+        if (allComments.length > 0 && allComments[0].isOriginalPost) {
+            hasSpoken.add(allComments[0].by);
+        }
+        
+        // Add all commenters who have already been processed
+        for (let i = 1; i <= lastProcessedCommentIndex; i++) {
+            if (i < allComments.length) {
+                hasSpoken.add(allComments[i].by);
+            }
+        }
         
         // Process comments in order
         let lastCommenter = startIndex > 0 ? allComments[lastProcessedCommentIndex].by : '';
@@ -1013,8 +1029,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Determine if user has multiple comments
             const hasMultipleComments = commentersCount[commenter] > 1;
-            const isFirstCommentByUser = commentsByUser[commenter] && 
-                commentsByUser[commenter].findIndex(c => c.id === comment.id) === 0;
+            const isFirstTimeSpeak = !hasSpoken.has(commenter);
             const isSameAsLastCommenter = commenter === lastCommenter;
             
             // Determine if we need a context introduction (replying to someone)
@@ -1035,7 +1050,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Add user introduction if needed
             if (hasMultipleComments) {
-                if (isFirstCommentByUser) {
+                if (isFirstTimeSpeak) {
                     // First time this commenter speaks
                     const introPhrase = getRandomPhrase(firstIntroductions, commenter);
                     commentText += `${introPhrase} `;
@@ -1044,8 +1059,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     const returnIntro = getRandomPhrase(returnIntroductions, commenter);
                     commentText += `${returnIntro} `;
                 }
-            } else if (!isSameAsLastCommenter) {
-                // Single comment user - always introduce themselves
+            } else if (isFirstTimeSpeak) {
+                // Single comment user speaking for the first time
                 const introPhrase = getRandomPhrase(firstIntroductions, commenter);
                 commentText += `${introPhrase} `;
             }
@@ -1060,6 +1075,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Add pause between comments (800ms silence)
                 const silenceBlob = generateSilence(800);
                 audioBlobs.push(silenceBlob);
+                
+                // Mark this commenter as having spoken
+                hasSpoken.add(commenter);
                 
                 processedComments++;
                 lastProcessedCommentIndex = i;
