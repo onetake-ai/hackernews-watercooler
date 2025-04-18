@@ -1,4 +1,6 @@
 document.addEventListener('DOMContentLoaded', () => {
+    // v2.0.0
+
     // DOM Elements
     const form = document.getElementById('audio-form');
     const apiKeyInput = document.getElementById('elevenlabs-api-key');
