@@ -130,12 +130,31 @@ document.addEventListener('DOMContentLoaded', () => {
         "Check out the several links in my post."
     ];
 
+    // Add self-reply introductions
+    const selfReplyIntroductions = [
+        "On further thinking, ",
+        "Another thing: ",
+        "One more thing: ",
+        "Also... ",
+        "To add to my earlier point, ",
+        "Adding to that, ",
+        "Furthermore, ",
+        "I'd like to clarify: ",
+        "Continuing my thought: "
+    ];
+
     // Initialize UI based on localStorage
     function initializeUI() {
         // Load theme preference
         if (localStorage.getItem('darkMode') === 'true') {
             document.body.classList.add('dark-mode');
             themeToggle.innerHTML = '<i class="fas fa-sun"></i>';
+        }
+        
+        // Load saved API key if exists
+        const savedApiKey = localStorage.getItem('elevenlabsApiKey');
+        if (savedApiKey) {
+            apiKeyInput.value = savedApiKey;
         }
         
         // Initialize input mode
@@ -157,6 +176,26 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Set up event listeners
+    document.getElementById('remember-api-key').addEventListener('change', function() {
+        if (this.checked) {
+            // Save current API key
+            if (apiKeyInput.value) {
+                localStorage.setItem('elevenlabsApiKey', apiKeyInput.value);
+            }
+        } else {
+            // Remove saved API key
+            localStorage.removeItem('elevenlabsApiKey');
+        }
+    });
+    
+    // Save API key when it changes (if remember is checked)
+    apiKeyInput.addEventListener('change', function() {
+        if (document.getElementById('remember-api-key').checked) {
+            localStorage.setItem('elevenlabsApiKey', this.value);
+        }
+    });
+    
     // Theme toggle functionality
     themeToggle.addEventListener('click', () => {
         document.body.classList.toggle('dark-mode');
@@ -521,14 +560,28 @@ document.addEventListener('DOMContentLoaded', () => {
         await processThread(threadData, apiKey);
     }
 
-    // Process multiple threads
+   // Process multiple threads
     async function processMultipleThreads(threadIds, apiKey, commentLimit) {
-        // Set total for progress tracking
-        totalComments = 0;
-        let processedThreads = 0;
+        // Reset for multiple threads processing
+        let threadResults = [];
         
-        for (const threadId of threadIds) {
-            statusMessage.textContent = `Processing thread ${processedThreads + 1} of ${threadIds.length}`;
+        for (let threadIndex = 0; threadIndex < threadIds.length; threadIndex++) {
+            // Reset state for this thread
+            audioBlobs = [];
+            voiceMapping = {}; // Keep voice mapping across threads
+            commentersCount = {};
+            commentsByUser = {};
+            processedComments = 0;
+            totalComments = 0;
+            totalCharacters = 0;
+            allComments = [];
+            commentHierarchy = {};
+            sharedLinks = [];
+            lastProcessedCommentIndex = -1;
+            audioChapters = [];
+            
+            const threadId = threadIds[threadIndex];
+            statusMessage.textContent = `Processing thread ${threadIndex + 1} of ${threadIds.length}`;
             
             // Fetch thread data
             const threadData = await fetchHNThread(threadId);
@@ -537,31 +590,124 @@ document.addEventListener('DOMContentLoaded', () => {
                 continue;
             }
             
-            // Add a silence gap between threads if not the first thread
-            if (processedThreads > 0) {
-                const silenceBlob = generateSilence(1500);
-                audioBlobs.push(silenceBlob);
-                
-                // Add thread transition announcement
-                const transitionText = "Moving to the next thread.";
-                const announcer = Object.values(voiceMapping)[0]; // Use first voice as announcer
-                
-                if (announcer) {
-                    await generateAndAddAudio(transitionText, announcer, apiKey);
-                    const silenceBlob = generateSilence(1000);
-                    audioBlobs.push(silenceBlob);
-                }
-            }
-            
             // Preprocess thread
-            allComments = []; // Reset comments for this thread
             await preprocessThread(threadData, commentLimit);
             
             // Process this thread
             await processThread(threadData, apiKey);
             
-            processedThreads++;
+            // Wait for any pending fetch operations
+            await waitForPendingFetches();
+            
+            // Create final audio for this thread
+            if (audioBlobs.length > 0) {
+                const threadAudio = await combineAudioBlobs(audioBlobs);
+                
+                // Store thread result
+                threadResults.push({
+                    threadId: threadId,
+                    title: threadData.title || `Thread ${threadId}`,
+                    audio: threadAudio,
+                    links: [...sharedLinks]
+                });
+            }
         }
+        
+        // Display results for all threads
+        displayMultipleThreadResults(threadResults);
+    }
+    
+    // Display results for multiple threads
+    function displayMultipleThreadResults(threadResults) {
+        // Hide progress container
+        progressContainer.classList.add('hidden');
+        
+        // Clear result container
+        resultContainer.innerHTML = '<h3>Generated Audios</h3>';
+        resultContainer.classList.remove('hidden');
+        
+        if (threadResults.length === 0) {
+            resultContainer.innerHTML += '<p>No valid threads were processed.</p>';
+            return;
+        }
+        
+        // Create container for thread results
+        const threadsContainer = document.createElement('div');
+        threadsContainer.className = 'threads-container';
+        
+        // Add each thread result
+        threadResults.forEach((result, index) => {
+            const threadDiv = document.createElement('div');
+            threadDiv.className = 'thread-result';
+            
+            // Thread title
+            const title = document.createElement('h4');
+            title.textContent = result.title;
+            threadDiv.appendChild(title);
+            
+            // Audio player
+            const audio = document.createElement('audio');
+            audio.controls = true;
+            audio.src = URL.createObjectURL(result.audio);
+            threadDiv.appendChild(audio);
+            
+            // Download button
+            const downloadBtn = document.createElement('button');
+            const fileSizeMB = (result.audio.size / (1024 * 1024)).toFixed(2);
+            downloadBtn.textContent = `Download Audio (${fileSizeMB} MB)`;
+            downloadBtn.className = 'download-btn';
+            downloadBtn.addEventListener('click', () => {
+                const a = document.createElement('a');
+                a.href = audio.src;
+                const sanitizedTitle = result.title.replace(/[^\w\s]/gi, '').replace(/\s+/g, '-').slice(0, 30);
+                a.download = `hn-${sanitizedTitle}.mp3`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            });
+            threadDiv.appendChild(downloadBtn);
+            
+            // Links container (if any)
+            if (result.links && result.links.length > 0) {
+                const linksDiv = document.createElement('div');
+                linksDiv.className = 'thread-links';
+                
+                const linksTitle = document.createElement('h5');
+                linksTitle.textContent = 'Shared Links';
+                linksDiv.appendChild(linksTitle);
+                
+                const linksList = document.createElement('ul');
+                result.links.forEach(link => {
+                    const listItem = document.createElement('li');
+                    const linkElement = document.createElement('a');
+                    linkElement.href = link.href;
+                    linkElement.textContent = link.text || link.href;
+                    linkElement.target = '_blank';
+                    linkElement.rel = 'noopener noreferrer';
+                    
+                    const commenterSpan = document.createElement('span');
+                    commenterSpan.className = 'link-commenter';
+                    commenterSpan.textContent = ` (shared by ${link.commenter})`;
+                    
+                    listItem.appendChild(linkElement);
+                    listItem.appendChild(commenterSpan);
+                    linksList.appendChild(listItem);
+                });
+                
+                linksDiv.appendChild(linksList);
+                threadDiv.appendChild(linksDiv);
+            }
+            
+            threadsContainer.appendChild(threadDiv);
+            
+            // Add separator if not the last thread
+            if (index < threadResults.length - 1) {
+                const separator = document.createElement('hr');
+                threadsContainer.appendChild(separator);
+            }
+        });
+        
+        resultContainer.appendChild(threadsContainer);
     }
 
     // Download button
@@ -974,239 +1120,260 @@ document.addEventListener('DOMContentLoaded', () => {
         await resumeProcessingComments(apiKey);
     }
     
-    // Resume processing comments from where we left off
-    async function resumeProcessingComments(apiKey) {
-        console.log(`Resuming processing from comment index ${lastProcessedCommentIndex + 1}`);
-        
-        // Start from the comment after the last processed one
-        const startIndex = lastProcessedCommentIndex + 1;
-        
-        // Check if we have any comments to process
-        if (startIndex >= allComments.length) {
-            console.log('No more comments to process');
-            return;
-        }
-        
-        console.log(`Processing ${allComments.length - startIndex} remaining comments`);
-        
-        // Track who has already spoken
-        const hasSpoken = new Set();
-        
-        // The original poster has already spoken
-        if (allComments.length > 0 && allComments[0].isOriginalPost) {
-            hasSpoken.add(allComments[0].by);
-        }
-        
-        // Add all commenters who have already been processed
-        for (let i = 1; i <= lastProcessedCommentIndex; i++) {
-            if (i < allComments.length) {
-                hasSpoken.add(allComments[i].by);
-            }
-        }
-        
-        // Process comments in order
-        let lastCommenter = startIndex > 0 ? allComments[lastProcessedCommentIndex].by : '';
-        let lastCommentParent = startIndex > 0 ? allComments[lastProcessedCommentIndex].parent : null;
-        
-        for (let i = startIndex; i < allComments.length; i++) {
-            const comment = allComments[i];
-            const commenter = comment.by;
-            
-            console.log(`Processing comment ${i+1}/${allComments.length} by ${commenter}`);
-            
-            // Add chapter marker for this comment
-            const chapterStartTime = new Date().getTime();
-            const chapterTitle = `Comment by ${commenter}`;
-            addChapterMarker(chapterStartTime, chapterTitle, comment.text?.substring(0, 50) || '');
-            
-            currentUser.textContent = commenter;
-            
-            // Assign voice if not already assigned
-            assignVoice(commenter);
-            
-            // Process text content (handle links and quotes)
-            let processedText = processTextContent(comment.text);
-            
-            // Determine if user has multiple comments
-            const hasMultipleComments = commentersCount[commenter] > 1;
-            const isFirstTimeSpeak = !hasSpoken.has(commenter);
-            const isSameAsLastCommenter = commenter === lastCommenter;
-            
-            // Determine if we need a context introduction (replying to someone)
-            const needsContextIntro = comment.parent !== lastCommentParent && comment.parent !== null;
-            
-            // Build introduction text
-            let commentText = "";
-            
-            // Add context intro if needed (replying to someone)
-            if (needsContextIntro) {
-                const parentComment = allComments.find(c => c.id === comment.parent);
-                if (parentComment) {
-                    const parentUsername = parentComment.by;
-                    const replyIntro = getRandomPhrase(replyIntroductions, parentUsername);
-                    commentText += `${replyIntro} `;
-                }
-            }
-            
-            // Add user introduction if needed
-            if (hasMultipleComments) {
-                if (isFirstTimeSpeak) {
-                    // First time this commenter speaks
-                    const introPhrase = getRandomPhrase(firstIntroductions, commenter);
-                    commentText += `${introPhrase} `;
-                } else if (!isSameAsLastCommenter) {
-                    // Returning commenter who wasn't the last speaker
-                    const returnIntro = getRandomPhrase(returnIntroductions, commenter);
-                    commentText += `${returnIntro} `;
-                }
-            } else if (isFirstTimeSpeak) {
-                // Single comment user speaking for the first time
-                const introPhrase = getRandomPhrase(firstIntroductions, commenter);
-                commentText += `${introPhrase} `;
-            }
-            
-            // Add the comment text
-            commentText += processedText;
-            
-            try {
-                // Generate audio for this comment
-                await generateAndAddAudio(commentText, voiceMapping[commenter], apiKey);
-                
-                // Add pause between comments (800ms silence)
-                const silenceBlob = generateSilence(800);
-                audioBlobs.push(silenceBlob);
-                
-                // Mark this commenter as having spoken
-                hasSpoken.add(commenter);
-                
-                processedComments++;
-                lastProcessedCommentIndex = i;
-                updateProgress();
-                
-                lastCommenter = commenter;
-                lastCommentParent = comment.parent;
-            } catch (error) {
-                console.error(`Error processing comment ${i}:`, error);
-                // Don't throw here, just update status and show retry button
-                statusMessage.textContent = `Error processing comment: ${error.message}`;
-                retryBtn.classList.remove('hidden');
-                break;
-            }
-        }
-        
-        console.log('Finished processing comments');
+// Resume processing comments from where we left off
+async function resumeProcessingComments(apiKey) {
+    console.log(`Resuming processing from comment index ${lastProcessedCommentIndex + 1}`);
+    
+    // Start from the comment after the last processed one
+    const startIndex = lastProcessedCommentIndex + 1;
+    
+    // Check if we have any comments to process
+    if (startIndex >= allComments.length) {
+        console.log('No more comments to process');
+        return;
     }
     
-    // Process text content to handle links and quotes properly
-    function processTextContent(text) {
-        if (!text) return '';
-        
-        // Create a temporary DOM element to parse HTML
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = text;
-        
-        // Find all links
-        const links = tempDiv.querySelectorAll('a');
-        
-        // Handle the links appropriately
-        if (links.length > 0) {
-            // Store links for shared links section
-            for (let i = 0; i < links.length; i++) {
-                const link = links[i];
-                const href = link.getAttribute('href');
-                const linkText = link.textContent;
-                
-                if (href && !sharedLinks.some(l => l.href === href)) {
-                    sharedLinks.push({
-                        href: href,
-                        text: linkText,
-                        commenter: currentUser.textContent
-                    });
-                }
-            }
-            
-            // Update the shared links display
-            updateSharedLinksDisplay();
-            
-            // Replace links with appropriate messages
-            if (links.length === 1) {
-                // Only one link
-                links[0].textContent = getRandomPhrase(firstLinkPhrases);
-            } else if (links.length === 2) {
-                // Two links
-                links[0].textContent = getRandomPhrase(firstLinkPhrases);
-                links[1].textContent = getRandomPhrase(secondLinkPhrases);
-            } else if (links.length > 2) {
-                // More than two links
-                links[0].textContent = getRandomPhrase(firstLinkPhrases);
-                links[1].textContent = getRandomPhrase(multipleLinksPhrases);
-                
-                // Remove remaining links (keep the text, remove the link)
-                for (let i = 2; i < links.length; i++) {
-                    const textNode = document.createTextNode('');
-                    links[i].parentNode.replaceChild(textNode, links[i]);
-                }
-            }
-        }
-        
-        // Process quotes (lines starting with ">")
-        let textContent = tempDiv.textContent || tempDiv.innerText || '';
-        
-        // Split by lines to find quotes
-        const lines = textContent.split('\n');
-        let processedLines = [];
-        let inQuote = false;
-        
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim();
-            
-            if (line.startsWith('>')) {
-                // This is a quote line
-                const quoteContent = line.substring(1).trim();
-                
-                if (!inQuote) {
-                    // Start of a quote block
-                    const quoteIntro = getRandomPhrase(quoteIntroductions);
-                    processedLines.push(`${quoteIntro} "${quoteContent}`);
-                    inQuote = true;
-                } else {
-                    // Continuation of quote block
-                    processedLines.push(quoteContent);
-                }
-            } else {
-                // Not a quote line
-                if (inQuote) {
-                    // End the quote block
-                    const lastLine = processedLines.pop();
-                    const quoteEnding = getRandomPhrase(quoteEndings);
-                    processedLines.push(`${lastLine}" ${quoteEnding}`);
-                    inQuote = false;
-                }
-                
-                if (line) {
-                    processedLines.push(line);
-                }
-            }
-        }
-        
-        // Close any open quote block
-        if (inQuote) {
-            const lastLine = processedLines.pop();
-            const quoteEnding = getRandomPhrase(quoteEndings);
-            processedLines.push(`${lastLine}" ${quoteEnding}`);
-        }
-        
-        // Join lines back together
-        let processedText = processedLines.join(' ');
-        
-        // Remove citation numbers like [0], [1], etc.
-        processedText = processedText.replace(/\[\d+\]/g, '');
-        
-        // Clean any lingering HTML entities
-        processedText = processedText.replace(/&[#\w]+;/g, ' ');
-        
-        return processedText;
+    console.log(`Processing ${allComments.length - startIndex} remaining comments`);
+    
+    // Track who has already spoken
+    const hasSpoken = new Set();
+    
+    // The original poster has already spoken
+    if (allComments.length > 0 && allComments[0].isOriginalPost) {
+        hasSpoken.add(allComments[0].by);
     }
+    
+    // Add all commenters who have already been processed
+    for (let i = 1; i <= lastProcessedCommentIndex; i++) {
+        if (i < allComments.length) {
+            hasSpoken.add(allComments[i].by);
+        }
+    }
+    
+    // Process comments in order
+    let lastCommenter = startIndex > 0 ? allComments[lastProcessedCommentIndex].by : '';
+    let lastCommentParent = startIndex > 0 ? allComments[lastProcessedCommentIndex].parent : null;
+    
+    for (let i = startIndex; i < allComments.length; i++) {
+        const comment = allComments[i];
+        const commenter = comment.by;
+        
+        console.log(`Processing comment ${i+1}/${allComments.length} by ${commenter}`);
+        
+        // Add chapter marker for this comment
+        const chapterStartTime = new Date().getTime();
+        const chapterTitle = `Comment by ${commenter}`;
+        addChapterMarker(chapterStartTime, chapterTitle, comment.text?.substring(0, 50) || '');
+        
+        currentUser.textContent = commenter;
+        
+        // Assign voice if not already assigned
+        assignVoice(commenter);
+        
+        // Process text content (handle links and quotes)
+        let processedText = processTextContent(comment.text);
+        
+        // Determine if user has multiple comments
+        const hasMultipleComments = commentersCount[commenter] > 1;
+        const isFirstTimeSpeak = !hasSpoken.has(commenter);
+        const isSameAsLastCommenter = commenter === lastCommenter;
+        
+        // Get parent commenter to check for self-replies
+        const parentComment = allComments.find(c => c.id === comment.parent);
+        const isReplyingToSelf = parentComment && parentComment.by === commenter;
+        
+        // Check if this is a top-level comment (replying directly to original post)
+        const isTopLevelComment = parentComment && parentComment.isOriginalPost;
+        
+        // Build introduction text
+        let commentText = "";
+        
+        // Self-reply case
+        if (isReplyingToSelf && !isFirstTimeSpeak) {
+            const selfReplyIntro = getRandomPhrase(selfReplyIntroductions);
+            commentText += `${selfReplyIntro} `;
+        }
+        // Not self-reply - add context intro if needed
+        else if (!isTopLevelComment && comment.parent !== lastCommentParent && comment.parent !== null && !isReplyingToSelf) {
+            if (parentComment) {
+                const parentUsername = parentComment.by;
+                const replyIntro = getRandomPhrase(replyIntroductions, parentUsername);
+                commentText += `${replyIntro} `;
+            }
+        }
+        
+        // Add user introduction if needed
+        if (hasMultipleComments) {
+            if (isFirstTimeSpeak) {
+                // First time this commenter speaks
+                const introPhrase = getRandomPhrase(firstIntroductions, commenter);
+                commentText += `${introPhrase} `;
+            } else if (!isSameAsLastCommenter && !isReplyingToSelf) {
+                // Returning commenter who wasn't the last speaker and isn't replying to self
+                const returnIntro = getRandomPhrase(returnIntroductions, commenter);
+                commentText += `${returnIntro} `;
+            }
+        } else if (isFirstTimeSpeak) {
+            // Single comment user speaking for the first time
+            const introPhrase = getRandomPhrase(firstIntroductions, commenter);
+            commentText += `${introPhrase} `;
+        }
+        
+        // Add the comment text
+        commentText += processedText;
+        
+        try {
+            // Generate audio for this comment
+            await generateAndAddAudio(commentText, voiceMapping[commenter], apiKey);
+            
+            // Add pause between comments (800ms silence)
+            const silenceBlob = generateSilence(800);
+            audioBlobs.push(silenceBlob);
+            
+            // Mark this commenter as having spoken
+            hasSpoken.add(commenter);
+            
+            processedComments++;
+            lastProcessedCommentIndex = i;
+            updateProgress();
+            
+            lastCommenter = commenter;
+            lastCommentParent = comment.parent;
+        } catch (error) {
+            console.error(`Error processing comment ${i}:`, error);
+            // Don't throw here, just update status and show retry button
+            statusMessage.textContent = `Error processing comment: ${error.message}`;
+            retryBtn.classList.remove('hidden');
+            break;
+        }
+    }
+    
+    console.log('Finished processing comments');
+}
+    
+// Process text content to handle links and quotes properly
+function processTextContent(text) {
+    if (!text) return '';
+    
+    // Create a temporary DOM element to parse HTML
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = text;
+    
+    // Find all links
+    const links = tempDiv.querySelectorAll('a');
+    
+    // Handle the links appropriately
+    if (links.length > 0) {
+        // Store links for shared links section
+        for (let i = 0; i < links.length; i++) {
+            const link = links[i];
+            const href = link.getAttribute('href');
+            const linkText = link.textContent;
+            
+            if (href && !sharedLinks.some(l => l.href === href)) {
+                sharedLinks.push({
+                    href: href,
+                    text: linkText,
+                    commenter: currentUser.textContent
+                });
+            }
+        }
+        
+        // Update the shared links display
+        updateSharedLinksDisplay();
+        
+        // Replace links with appropriate messages
+        if (links.length === 1) {
+            // Only one link
+            links[0].textContent = getRandomPhrase(firstLinkPhrases);
+        } else if (links.length === 2) {
+            // Two links
+            links[0].textContent = getRandomPhrase(firstLinkPhrases);
+            links[1].textContent = getRandomPhrase(secondLinkPhrases);
+        } else if (links.length > 2) {
+            // More than two links
+            links[0].textContent = getRandomPhrase(firstLinkPhrases);
+            links[1].textContent = getRandomPhrase(secondLinkPhrases);
+            
+            // Remove remaining links (keep the text, remove the link)
+            for (let i = 2; i < links.length; i++) {
+                const textNode = document.createTextNode('');
+                links[i].parentNode.replaceChild(textNode, links[i]);
+            }
+        }
+    }
+    
+    // Process quotes in p tags first
+    const paragraphs = tempDiv.querySelectorAll('p');
+    paragraphs.forEach(p => {
+        const content = p.textContent.trim();
+        if (content.startsWith('>')) {
+            // This entire paragraph is a quote
+            const quoteContent = content.substring(1).trim();
+            const quoteIntro = getRandomPhrase(quoteIntroductions);
+            const quoteEnding = getRandomPhrase(quoteEndings);
+            p.textContent = `${quoteIntro} "${quoteContent}" ${quoteEnding}`;
+        }
+    });
+    
+    // Now get the full content and process remaining quotes (not in p tags)
+    let textContent = tempDiv.textContent || tempDiv.innerText || '';
+    
+    // Split by lines to find quotes
+    const lines = textContent.split('\n');
+    let processedLines = [];
+    let inQuote = false;
+    
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        
+        if (line.startsWith('>') && !line.startsWith('> "')) {
+            // This is a quote line (and not already processed)
+            const quoteContent = line.substring(1).trim();
+            
+            if (!inQuote) {
+                // Start of a quote block
+                const quoteIntro = getRandomPhrase(quoteIntroductions);
+                processedLines.push(`${quoteIntro} "${quoteContent}`);
+                inQuote = true;
+            } else {
+                // Continuation of quote block
+                processedLines.push(quoteContent);
+            }
+        } else {
+            // Not a quote line
+            if (inQuote) {
+                // End the quote block
+                const lastLine = processedLines.pop();
+                const quoteEnding = getRandomPhrase(quoteEndings);
+                processedLines.push(`${lastLine}" ${quoteEnding}`);
+                inQuote = false;
+            }
+            
+            if (line) {
+                processedLines.push(line);
+            }
+        }
+    }
+    
+    // Close any open quote block
+    if (inQuote) {
+        const lastLine = processedLines.pop();
+        const quoteEnding = getRandomPhrase(quoteEndings);
+        processedLines.push(`${lastLine}" ${quoteEnding}`);
+    }
+    
+    // Join lines back together
+    let processedText = processedLines.join(' ');
+    
+    // Remove citation numbers like [0], [1], etc.
+    processedText = processedText.replace(/\[\d+\]/g, '');
+    
+    // Clean any lingering HTML entities
+    processedText = processedText.replace(/&[#\w]+;/g, ' ');
+    
+    return processedText;
+}
 
     // Update the shared links display
     function updateSharedLinksDisplay() {
