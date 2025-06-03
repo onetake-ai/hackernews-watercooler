@@ -431,3 +431,21 @@ hr {
     border-top: 1px solid var(--border-color);
     margin: 0.5rem 0;
 }
+
+.remember-key-container {
+    margin-top: 0.5rem;
+    display: flex;
+    align-items: center;
+}
+
+.remember-key-container input[type="checkbox"] {
+    width: auto;
+    margin-right: 0.5rem;
+}
+
+.remember-key-container label {
+    display: inline;
+    margin-bottom: 0;
+    font-weight: normal;
+    font-size: 0.9rem;
+}
