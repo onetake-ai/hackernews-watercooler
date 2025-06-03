@@ -379,3 +379,55 @@ footer {
         flex-direction: column;
     }
 }
+
+.threads-container {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.thread-result {
+    padding: 1rem;
+    background-color: var(--secondary-color);
+    border-radius: 8px;
+    box-shadow: 0 2px 4px var(--shadow-color);
+}
+
+.thread-result h4 {
+    margin-bottom: 0.75rem;
+}
+
+.thread-result audio {
+    width: 100%;
+    margin: 0.5rem 0;
+}
+
+.thread-result .download-btn {
+    margin-top: 0.5rem;
+}
+
+.thread-links {
+    margin-top: 1rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.thread-links h5 {
+    margin-bottom: 0.5rem;
+}
+
+.thread-links ul {
+    list-style-type: none;
+    margin: 0;
+    padding: 0;
+}
+
+.thread-links li {
+    margin-bottom: 0.5rem;
+}
+
+hr {
+    border: none;
+    border-top: 1px solid var(--border-color);
+    margin: 0.5rem 0;
+}
