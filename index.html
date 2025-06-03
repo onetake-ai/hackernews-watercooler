@@ -36,14 +36,18 @@
                         </a>
                         <div id="api-tooltip" class="tooltip">
                             <h4>API Key Information</h4>
-                            <p>You need an ElevenLabs API key to use this app. Sign up at elevenlabs.io to get your key.</p>
+                            <p>You need an ElevenLabs API key to use this app. <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank">Get your key here</a>.</p>
                             <p>Required permissions:</p>
                             <ul>
                                 <li>Text-to-Speech generation</li>
                                 <li>Voice listing</li>
                             </ul>
-                            <p>Your API key stays in your browser and is never sent to our servers.</p>
+                            <p>Your API key stays in your browser and is never sent to our servers. It's optionally stored in your browser's local storage, if "Remember API key" is checked.</p>
                         </div>
+                    </div>
+                    <div class="remember-key-container">
+                        <input type="checkbox" id="remember-api-key" checked>
+                        <label for="remember-api-key">Remember API key</label>
                     </div>
                     <div class="error-message" id="api-key-error"></div>
                 </div>
